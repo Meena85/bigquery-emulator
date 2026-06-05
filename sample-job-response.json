@@ -1,0 +1,57 @@
+{
+    "configuration": {
+        "query": {
+            "destinationTable": {
+                "datasetId": "public",
+                "tableId": "integration_test",
+                "projectId": "PROJECT_ID"
+            },
+            "query": "SELECT * FROM QUERY;",
+            "useLegacySql": false
+        }
+    },
+    "kind": "bigquery#job",
+    "etag": "\"JOB_ID\"",
+    "id": "PROJECT_ID:LOCATION.JOB_ID",
+    "jobReference": {
+        "jobId": "JOB_ID",
+        "location": "LOCATION",
+        "projectId": "PROJECT_ID"
+    },
+    "selfLink": "\/bigquery\/v2\/projects\/PROJECT_ID\/jobs\/JOB_ID",
+    "statistics": {
+        "creationTime": "1000000",
+        "query": {
+            "schema": {
+                "fields": [
+                    {
+                        "mode": "NULLABLE",
+                        "name": "column_1",
+                        "type": "FLOAT"
+                    }
+                ]
+            },
+            "totalBytesBilled": "100",
+            "cacheHit": false,
+            "totalRows": "1",
+            "totalBytesProcessed": "100"
+        },
+        "startTime": "1000000",
+        "endTime": "2000000"
+    },
+    "status": {
+        "errorResult": {
+            "reason": "invalidQuery",
+            "location": "query",
+            "message": "ERROR MSG"
+        },
+        "state": "DONE",
+        "errors": [
+            {
+                "reason": "invalidQuery",
+                "location": "query",
+                "message": "ERROR MSG"
+            }
+        ]
+    }
+}
