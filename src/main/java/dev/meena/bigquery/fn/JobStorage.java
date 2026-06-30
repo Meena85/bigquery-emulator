@@ -1,8 +1,8 @@
 package dev.meena.bigquery.fn;
 
 import dev.meena.bigquery.model.GetQueryResultsResponse;
+import dev.meena.bigquery.model.Job;
 import jakarta.enterprise.context.ApplicationScoped;
-import org.json.simple.JSONObject;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -12,18 +12,18 @@ public class JobStorage {
 
     private final ConcurrentMap<String, JobItem> JOBS;
 
-    record JobItem(JSONObject jobDefinition, GetQueryResultsResponse jobResults) {
+    record JobItem(Job jobDefinition, GetQueryResultsResponse jobResults) {
     }
 
     public JobStorage() {
         JOBS = new ConcurrentHashMap<>();
     }
 
-    public void put(String jobId, JSONObject jobDefinition, GetQueryResultsResponse jobResults) {
+    public void put(String jobId, Job jobDefinition, GetQueryResultsResponse jobResults) {
         JOBS.put(jobId, new JobItem(jobDefinition, jobResults));
     }
 
-    public JSONObject jobDefinition(String jobId) {
+    public Job jobDefinition(String jobId) {
         JobItem job = JOBS.get(jobId);
         return job == null ? null : job.jobDefinition();
     }

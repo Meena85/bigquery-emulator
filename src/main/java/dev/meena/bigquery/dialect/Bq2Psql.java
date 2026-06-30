@@ -1,12 +1,14 @@
 package dev.meena.bigquery.dialect;
 
+import dev.meena.bigquery.fn.Fn;
 import dev.meena.bigquery.model.TableDataInsertAllRequest;
 import dev.meena.bigquery.model.TableDataInsertAllRequestRowsInner;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.apache.calcite.config.Lex;
-import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.sql.*;
 import org.apache.calcite.sql.parser.SqlParseException;
 import org.apache.calcite.sql.parser.SqlParser;
+import org.apache.calcite.sql.util.SqlShuttle;
 import org.apache.calcite.sql.validate.SqlConformanceEnum;
 
 import java.util.ArrayList;
@@ -39,7 +41,97 @@ public class Bq2Psql implements SqlSyntaxConverter {
 
         // 3. Unparse the AST into PostgreSQL dialect
         // This automatically converts backticks to double quotes and handles quoting rules
-        return sqlNode.toSqlString(BqToPgDialect.INSTANCE).getSql();
+        return rewriteTableIdentifiers(sqlNode, null).toSqlString(BqToPgDialect.INSTANCE).getSql();
+    }
+
+    @Override
+    public String translate(String bqSql, String defaultProject) throws SqlParseException {
+        SqlParser parser = SqlParser.create(bqSql, parserConfig);
+        SqlNode sqlNode = parser.parseQuery();
+
+        return rewriteTableIdentifiers(sqlNode, defaultProject)
+                .toSqlString(BqToPgDialect.INSTANCE)
+                .getSql();
+    }
+
+    private static SqlNode rewriteTableIdentifiers(SqlNode sqlNode, String defaultProject) {
+        return sqlNode.accept(new SqlShuttle() {
+            @Override
+            public SqlNode visit(SqlCall call) {
+                if (call instanceof SqlSelect select) {
+                    SqlNode from = select.getFrom();
+                    if (from != null) {
+                        select.setFrom(rewriteFromNode(from, defaultProject));
+                    }
+                }
+
+                return super.visit(call);
+            }
+        });
+    }
+
+    private static SqlNode rewriteFromNode(SqlNode from, String defaultProject) {
+        if (from instanceof SqlIdentifier identifier) {
+            return rewriteTableIdentifier(identifier, defaultProject);
+        }
+
+        if (from instanceof SqlJoin join) {
+            join.setLeft(rewriteFromNode(join.getLeft(), defaultProject));
+            join.setRight(rewriteFromNode(join.getRight(), defaultProject));
+            return join;
+        }
+
+        if (from instanceof SqlCall call && call.getKind() == SqlKind.AS) {
+            SqlNode table = call.operand(0);
+
+            // Rewrite only the table expression. Do not rewrite operand 1,
+            // because operand 1 is the alias.
+            call.setOperand(0, rewriteFromNode(table, defaultProject));
+            return call;
+        }
+
+        if (from instanceof SqlCall call) {
+            return call.accept(new SqlShuttle() {
+                @Override
+                public SqlNode visit(SqlCall nestedCall) {
+                    if (nestedCall instanceof SqlSelect nestedSelect) {
+                        SqlNode nestedFrom = nestedSelect.getFrom();
+                        if (nestedFrom != null) {
+                            nestedSelect.setFrom(rewriteFromNode(nestedFrom, defaultProject));
+                        }
+                    }
+
+                    return super.visit(nestedCall);
+                }
+            });
+        }
+
+        return from;
+    }
+
+    private static SqlIdentifier rewriteTableIdentifier(SqlIdentifier identifier, String defaultProject) {
+        if (identifier.names.size() == 3) {
+            String project = identifier.names.get(0);
+            String dataset = identifier.names.get(1);
+            String table = identifier.names.get(2);
+
+            return new SqlIdentifier(
+                    List.of(project.toLowerCase() + "|" + dataset.toLowerCase(), table),
+                    identifier.getParserPosition()
+            );
+        }
+
+        if (identifier.names.size() == 2 && defaultProject != null && !defaultProject.isBlank()) {
+            String dataset = identifier.names.get(0);
+            String table = identifier.names.get(1);
+
+            return new SqlIdentifier(
+                    List.of(defaultProject.toLowerCase() + "|" + dataset.toLowerCase(), table),
+                    identifier.getParserPosition()
+            );
+        }
+
+        return identifier;
     }
 
     public record InsertAll(
@@ -51,8 +143,9 @@ public class Bq2Psql implements SqlSyntaxConverter {
     ) {
     }
 
-    public InsertAll insertAll(TableDataInsertAllRequest req, String schema, String table) {
+    public InsertAll insertAll(TableDataInsertAllRequest req, String projectId, String schema, String table) {
         if (req == null || req.getRows() == null) return null;
+        schema = Fn.toSchema(projectId, schema);
 
         Map<String, Class<?>> columns = new LinkedHashMap<>();
         for (TableDataInsertAllRequestRowsInner row : req.getRows()) {

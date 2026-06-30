@@ -1,13 +1,9 @@
 package dev.meena.bigquery.db;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
 import dev.meena.bigquery.dialect.Bq2Psql;
-import io.quarkus.runtime.ShutdownEvent;
-import io.quarkus.runtime.StartupEvent;
+import io.agroal.api.AgroalDataSource;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.event.Observes;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import jakarta.inject.Inject;
 import org.postgresql.util.PGobject;
 
 import java.math.BigDecimal;
@@ -25,38 +21,11 @@ public class Postgres {
 
     private static final Logger log = Logger.getLogger("Postgres");
 
-    @ConfigProperty(name = "db.url")
-    String url;
+    @Inject
+    @SuppressWarnings("CdiInjectionPointsInspection")
+    AgroalDataSource dataSource;
 
-    @ConfigProperty(name = "db.user")
-    String user;
-
-    @ConfigProperty(name = "db.password")
-    String password;
-
-    private HikariDataSource dataSource;
-
-    void onStart(@Observes StartupEvent ev) {
-        log.info("starting, url: " + url + ", user: " + user);
-
-        HikariConfig config = new HikariConfig();
-        config.setJdbcUrl(url);
-        config.setUsername(user);
-        config.setPassword(password);
-        config.setPoolName("pg-pool");
-        config.setMaximumPoolSize(5);
-        config.setMinimumIdle(0);
-
-        dataSource = new HikariDataSource(config);
-    }
-
-    void onStop(@Observes ShutdownEvent ev) {
-        if (dataSource != null) {
-            log.info("stopping...");
-            dataSource.close();
-        }
-    }
-
+    @SuppressWarnings("SqlSourceToSinkFlow")
     public QueryResult query(String query) {
         try (Connection con = dataSource.getConnection();
              Statement st = con.createStatement();
@@ -85,11 +54,12 @@ public class Postgres {
 
             return new QueryResult(columns, rows);
         } catch (SQLException ex) {
-            log.log(Level.SEVERE, ex.getMessage(), ex);
+            log.log(Level.SEVERE, "[QUERY] " + ex.getMessage());
             return new QueryResult(Collections.emptyList(), Collections.emptyList());
         }
     }
 
+    @SuppressWarnings("SqlSourceToSinkFlow")
     public void insertAll(Bq2Psql.InsertAll insertAll) {
         if (insertAll == null) {
             throw new IllegalArgumentException("Insert request is required");
@@ -122,8 +92,62 @@ public class Postgres {
             }
             con.commit();
         } catch (SQLException ex) {
-            log.log(Level.SEVERE, ex.getMessage(), ex);
+            log.log(Level.SEVERE, "[INSERT] " + ex.getMessage());
             throw new IllegalStateException("Unable to insert rows: " + ex.getMessage(), ex);
+        }
+    }
+
+    public void logTablesAndColumns() {
+        String sql = """
+                SELECT
+                    table_schema,
+                    table_name,
+                    column_name,
+                    data_type,
+                    is_nullable,
+                    ordinal_position
+                FROM information_schema.columns
+                WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+                  AND table_schema NOT LIKE 'pg_toast%'
+                ORDER BY table_schema, table_name, ordinal_position
+                """;
+
+        System.out.println("[DB SCHEMA] Tables and columns:");
+        log.info("[DB SCHEMA] Tables and columns:");
+        try (Connection con = dataSource.getConnection();
+             Statement st = con.createStatement();
+             ResultSet rs = st.executeQuery(sql)) {
+
+            String currentTable = null;
+            boolean foundAnyColumn = false;
+
+            int i = 0;
+            while (rs.next()) {
+                foundAnyColumn = true;
+
+                String schema = rs.getString("table_schema");
+                String table = rs.getString("table_name");
+                String tableKey = schema + "." + table;
+
+                if (!tableKey.equals(currentTable)) {
+                    currentTable = tableKey;
+                    log.info("[DB SCHEMA] " + tableKey);
+                }
+
+                log.info("[DB SCHEMA]   - "
+                        + rs.getString("column_name")
+                        + " "
+                        + rs.getString("data_type")
+                        + " nullable=" + rs.getString("is_nullable")
+                        + " ordinal=" + rs.getInt("ordinal_position"));
+                if (i++ == 6) break;
+            }
+
+            if (!foundAnyColumn) {
+                log.warning("[DB SCHEMA] No user tables/columns found");
+            }
+        } catch (SQLException ex) {
+            log.log(Level.SEVERE, "[DB SCHEMA] Unable to log tables and columns: " + ex.getMessage(), ex);
         }
     }
 

@@ -4,6 +4,7 @@ import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.SqlWriter;
 import org.apache.calcite.sql.dialect.PostgresqlSqlDialect;
+import org.apache.commons.lang3.StringUtils;
 
 /**
  * Convert BigQuery SQL to Postgres SQL.
@@ -23,9 +24,24 @@ public class BqToPgDialect extends PostgresqlSqlDialect {
     public void unparseCall(SqlWriter writer, SqlCall call, int leftPrec, int rightPrec) {
         String name = call.getOperator().getName().toUpperCase();
 
-        convertJsonExtract(writer, call, leftPrec, rightPrec, name);
+        if (convertJsonExtract(writer, call, leftPrec, rightPrec, name)) {
+            return;
+        }
 
         super.unparseCall(writer, call, leftPrec, rightPrec);
+    }
+
+    @Override
+    protected boolean identifierNeedsQuote(String val) {
+        if (StringUtils.isAlpha(val))
+            return false;
+
+        return !StringUtils.isAlphanumeric(val.replace('_', 'a'));
+    }
+
+    @Override
+    public StringBuilder quoteIdentifier(StringBuilder buf, String val) {
+        return super.quoteIdentifier(buf, val);
     }
 
     static String translateJsonPath(String bqPath) {
@@ -34,11 +50,11 @@ public class BqToPgDialect extends PostgresqlSqlDialect {
         // 2. Replace '.' and '[]' segments with commas
         return bqPath.replace("'", "")
                 .replace("$.", "")
-                .replaceAll("\\[(\\d+)\\]", ".$1") // [0] -> .0
+                .replaceAll("\\[(\\d+)]", ".$1") // [0] -> .0
                 .replace(".", ", ");
     }
 
-    static void convertJsonExtract(SqlWriter writer, SqlCall call, int leftPrec, int rightPrec, String name) {
+    static boolean convertJsonExtract(SqlWriter writer, SqlCall call, int leftPrec, int rightPrec, String name) {
         if (name.equals("JSON_EXTRACT") || name.equals("JSON_VALUE")) {
             // BigQuery: JSON_EXTRACT(json_col, '$.path')
             // Postgres: json_col::jsonb #> '{path}'
@@ -55,6 +71,9 @@ public class BqToPgDialect extends PostgresqlSqlDialect {
             // Convert '$.parts[0].text' to Postgres format '{parts, 0, text}'
             String pgPath = translateJsonPath(pathExpr.toString());
             writer.literal("'{" + pgPath + "}'");
+            return true;
         }
+
+        return false;
     }
 }

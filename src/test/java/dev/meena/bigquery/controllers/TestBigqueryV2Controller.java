@@ -2,20 +2,17 @@ package dev.meena.bigquery.controllers;
 
 import com.google.cloud.NoCredentials;
 import com.google.cloud.bigquery.*;
+import dev.meena.bigquery.db.Postgres;
 import dev.meena.test.StartPostgresContainers;
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.RestAssured;
-import org.apache.commons.lang3.StringUtils;
+import jakarta.inject.Inject;
 import org.jspecify.annotations.NonNull;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-import org.junit.jupiter.api.Assertions;
-
 import java.util.Map;
-
-import static io.restassured.RestAssured.given;
-import static org.hamcrest.CoreMatchers.containsString;
 
 /*
  * TODO:
@@ -32,13 +29,14 @@ import static org.hamcrest.CoreMatchers.containsString;
 public class TestBigqueryV2Controller {
 
     private static final String projectId = "test";
+    private static final String datasetId = "public";
+
+    @Inject
+    Postgres postgres;
 
     private static BigQuery bigQuery() {
-        final BigQueryOptions.Builder builder = BigQueryOptions.newBuilder();
-        if (StringUtils.isNotBlank(projectId)) {
-            builder.setProjectId(projectId);
-        }
-        return builder
+        return BigQueryOptions.newBuilder()
+                .setProjectId(projectId)
                 .setHost("http://localhost:" + RestAssured.port)
                 .setLocation("US")
                 .setCredentials(NoCredentials.getInstance())
@@ -51,19 +49,22 @@ public class TestBigqueryV2Controller {
     }
 
     @Test
-    void testHelloEndpoint() {
-        given()
-                .when().get("/")
-                .then()
-                .statusCode(200)
-                .body(containsString("Query"));
-    }
-
-    @Test
     void query() throws InterruptedException {
         var bq = bigQuery();
 
-        String sql = "SELECT * FROM `public`.`integration_test`";
+        String sql = "SELECT * FROM `public`.integration_test";
+        TableResult result = bq.query(wrapInConfig(sql));
+        FieldValueList row = result.iterateAll().iterator().next();
+
+        postgres.logTablesAndColumns();
+        Assertions.assertEquals("item 1", row.get(1).getStringValue());
+    }
+
+    @Test
+    void queryWithProject() throws InterruptedException {
+        var bq = bigQuery();
+
+        String sql = "SELECT * FROM `test`.`public`.integration_test";
         TableResult result = bq.query(wrapInConfig(sql));
         FieldValueList row = result.iterateAll().iterator().next();
 
@@ -74,7 +75,7 @@ public class TestBigqueryV2Controller {
     void createJob() throws InterruptedException {
         var bq = bigQuery();
 
-        String query = "SELECT * FROM `public`.`integration_test`";
+        String query = "SELECT * FROM `public`.integration_test";
         Job job = bq.create(JobInfo.newBuilder(wrapInConfig(query)).build());
 
         job.waitFor();
@@ -84,12 +85,13 @@ public class TestBigqueryV2Controller {
 
         Assertions.assertEquals("item 1", row.get(1).getStringValue());
     }
+
     @Test
     void insert() throws InterruptedException {
         var bq = bigQuery();
         InsertAllRequest request = InsertAllRequest.newBuilder("public", "integration_test")
-                .addRow("id", Map.of("value", "insert-test-1", "date", "2020-01-01", "data", "{ \"a\": \"test\" }"))
-                .addRow("id", Map.of("value", "insert-test-2"))
+                .addRow("id", Map.of("text", "insert-test-1", "date", "2020-01-01", "data", "{ \"a\": \"test\" }"))
+                .addRow("id", Map.of("text", "insert-test-2", "date", "2020-01-01", "data", "{ \"a\": \"test\" }"))
                 .build();
         InsertAllResponse insertResponse = bq.insertAll(request);
         Assertions.assertFalse(insertResponse.hasErrors());

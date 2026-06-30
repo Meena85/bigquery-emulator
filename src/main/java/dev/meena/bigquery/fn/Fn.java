@@ -8,6 +8,7 @@ import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.core.Response;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
+import org.jspecify.annotations.NonNull;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -25,6 +26,7 @@ import static org.apache.commons.lang3.StringUtils.isBlank;
 public class Fn {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final JobStatus DONE = new JobStatus(null, "DONE");
 
     public static JSONArray toSimpleJsonArray(Postgres.QueryResult result) {
         JSONArray json = new JSONArray();
@@ -91,9 +93,25 @@ public class Fn {
                 && (bytes[1] & 0xff) == 0x8b;
     }
 
+    /**
+     * Combine projectId and schema into a single string.
+     * The resulting string is in the format "projectId|schema".
+     *
+     * @param projectID The project ID.
+     * @param schema    The schema name.
+     * @return The combined string.
+     */
+    public static String toSchema(String projectID, String schema) {
+        if (projectID == null || schema == null) return schema;
+        return projectID.toLowerCase() + "|" + schema.toLowerCase();
+    }
+
     public record ErrorResponse(Error error) {
-        public record Error(int code, String message, String status, List<Detail> errors) {}
-        public record Detail(String reason, String message, String locationType) {}
+        public record Error(int code, String message, String status, List<Detail> errors) {
+        }
+
+        public record Detail(String reason, String message, String locationType) {
+        }
     }
 
     public static Response bigQueryError(Response.Status status, String message) {
@@ -112,9 +130,9 @@ public class Fn {
     }
 
     public static GetQueryResultsResponse toBigQueryQueryResponse(String projectId,
-                                    String jobId,
-                                    String location,
-                                    Postgres.QueryResult result) {
+                                                                  String jobId,
+                                                                  String location,
+                                                                  Postgres.QueryResult result) {
         var r = new GetQueryResultsResponse(null, null);
         r.setEtag("\"" + jobId + "\"");
         r.setJobComplete(true);
@@ -158,57 +176,6 @@ public class Fn {
         }
 
         return r;
-    }
-
-    public static JSONObject toBigQueryQueryResponse2(
-            String projectId,
-            String jobId,
-            String location,
-            Postgres.QueryResult result
-    ) {
-        JSONObject response = new JSONObject();
-
-        response.put("kind", "bigquery#getQueryResultsResponse");
-        response.put("etag", "\"" + jobId + "\"");
-        response.put("jobComplete", true);
-        response.put("totalRows", String.valueOf(result.rows().size()));
-        response.put("cacheHit", false);
-
-        JSONObject jobReference = new JSONObject();
-        jobReference.put("projectId", projectId);
-        jobReference.put("jobId", jobId);
-        jobReference.put("location", location);
-        response.put("jobReference", jobReference);
-
-        JSONObject schema = new JSONObject();
-        JSONArray fields = new JSONArray();
-        for (Postgres.Column column : result.columns()) {
-            JSONObject field = new JSONObject();
-            field.put("name", column.name());
-            field.put("type", Fn.toBigQueryType(column.jdbcType()));
-            field.put("mode", "NULLABLE");
-            fields.add(field);
-        }
-        schema.put("fields", fields);
-        response.put("schema", schema);
-
-        JSONArray rows = new JSONArray();
-        for (List<Object> sourceRow : result.rows()) {
-            JSONObject row = new JSONObject();
-            JSONArray values = new JSONArray();
-
-            for (Object rawValue : sourceRow) {
-                JSONObject value = new JSONObject();
-                value.put("v", Fn.toBigQueryValue(rawValue));
-                values.add(value);
-            }
-
-            row.put("f", values);
-            rows.add(row);
-        }
-        response.put("rows", rows);
-
-        return response;
     }
 
     public static String extractQuery(String requestBody) {
@@ -266,89 +233,42 @@ public class Fn {
         }
     }
 
-    public static JSONObject toBigQueryJob(
+    public static Job toJob(
             String projectId,
             String jobId,
             String location,
             String query,
+            TableReference destinationTable,
             Postgres.QueryResult result,
             long startTime,
             long endTime,
             String errorMessage
     ) {
-        JSONObject job = new JSONObject();
-        job.put("kind", "bigquery#job");
-        job.put("etag", "\"" + jobId + "\"");
-        job.put("id", projectId + ":" + location + "." + jobId);
-        job.put("selfLink", "/bigquery/v2/projects/" + projectId + "/jobs/" + jobId);
+        JobReference jobRef = new JobReference();
+        jobRef.setProjectId(projectId);
+        jobRef.setJobId(jobId);
+        jobRef.setLocation(location);
 
-        JSONObject jobReference = new JSONObject();
-        jobReference.put("projectId", projectId);
-        jobReference.put("jobId", jobId);
-        jobReference.put("location", location);
-        job.put("jobReference", jobReference);
+        JobConfigurationQuery jobConfig = new JobConfigurationQuery();
+        jobConfig.setQuery(query);
+        jobConfig.setUseLegacySql(false);
+        jobConfig.setDestinationTable(destinationTable);
 
-        JSONObject destinationTable = new JSONObject();
-        destinationTable.put("projectId", projectId);
-        destinationTable.put("datasetId", "public");
-        destinationTable.put("tableId", "integration_test");
+        JobConfiguration configuration = new JobConfiguration();
+        configuration.setQuery(jobConfig);
 
-        JSONObject configuration = new JSONObject();
-        JSONObject queryConfiguration = new JSONObject();
-        queryConfiguration.put("query", query);
-        queryConfiguration.put("useLegacySql", false);
-        queryConfiguration.put("destinationTable", destinationTable);
-        configuration.put("query", queryConfiguration);
-        job.put("configuration", configuration);
+        Job response = new Job("\"" + jobId + "\"",
+                projectId + ":" + location + "." + jobId,
+                "bigquery#job",
+                null,
+                "/bigquery/v2/projects/" + projectId + "/jobs/" + jobId,
+                "db@bigquery.local");
+        response.setStatus(errorMessage == null ? DONE : toErrorStatus("invalidQuery", "query", errorMessage));
+        response.setStatistics(toJobStatistics(startTime, endTime, result));
+        response.setConfiguration(configuration);
+        response.setJobReference(jobRef);
 
-        JSONObject statistics = new JSONObject();
-        statistics.put("creationTime", String.valueOf(startTime));
-        statistics.put("startTime", String.valueOf(startTime));
-        statistics.put("endTime", String.valueOf(endTime));
-
-        JSONObject queryStatistics = new JSONObject();
-        queryStatistics.put("totalBytesProcessed", "100");
-        queryStatistics.put("totalBytesBilled", "100");
-        queryStatistics.put("cacheHit", false);
-
-        if (result != null) {
-            queryStatistics.put("totalRows", String.valueOf(result.rows().size()));
-
-            JSONObject schema = new JSONObject();
-            JSONArray fields = new JSONArray();
-            for (Postgres.Column column : result.columns()) {
-                JSONObject field = new JSONObject();
-                field.put("name", column.name());
-                field.put("type", Fn.toBigQueryType(column.jdbcType()));
-                field.put("mode", "NULLABLE");
-                fields.add(field);
-            }
-            schema.put("fields", fields);
-            queryStatistics.put("schema", schema);
-        }
-
-        statistics.put("query", queryStatistics);
-        job.put("statistics", statistics);
-
-        JSONObject status = new JSONObject();
-        status.put("state", "DONE");
-
-        if (errorMessage != null) {
-            JSONObject errorResult = new JSONObject();
-            errorResult.put("reason", "invalidQuery");
-            errorResult.put("location", "query");
-            errorResult.put("message", errorMessage);
-
-            JSONArray errors = new JSONArray();
-            errors.add(errorResult);
-
-            status.put("errorResult", errorResult);
-            status.put("errors", errors);
-        }
-
-        job.put("status", status);
-
-        return job;
+        return response;
     }
 
     public static String quotePostgresIdentifier(String identifier) {
@@ -377,5 +297,93 @@ public class Fn {
 
         response.put("rows", rows);
         return response;
+    }
+
+    public static TableReference extractDestinationTable(String requestBody) {
+        if (requestBody == null || requestBody.isBlank()) {
+            return null;
+        }
+        TableReference tableReference = new TableReference();
+
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(requestBody);
+            JsonNode destinationTable = root.path("configuration").path("query").path("destinationTable");
+
+            if (destinationTable.isMissingNode() || destinationTable.isNull()) {
+                System.out.println("DESTINATION TABLE: not in configuration > query > destinationTable");
+                return null;
+            }
+
+            String projectId = textOrNull(destinationTable.path("projectId"));
+            String datasetId = textOrNull(destinationTable.path("datasetId"));
+            String tableId = textOrNull(destinationTable.path("tableId"));
+            if (datasetId == null || datasetId.isBlank() || tableId == null || tableId.isBlank()) {
+                System.out.println("DESTINATION TABLE: datasetId or tableId is null or blank");
+                return null;
+            }
+
+            tableReference.setProjectId(projectId);
+            tableReference.setDatasetId(datasetId);
+            tableReference.setTableId(tableId);
+
+            return tableReference;
+        } catch (Exception e) {
+            System.out.println("DESTINATION TABLE: exception occurred - " + e.getMessage());
+            return null;
+        }
+    }
+
+    private static String textOrNull(JsonNode node) {
+        return node != null && node.isTextual() ? node.asText() : null;
+    }
+
+    public static JobStatistics toJobStatistics(long startTime, long endTime, Postgres.QueryResult result) {
+        JobStatistics stats = new JobStatistics(
+                1.0,
+                String.valueOf(startTime),
+                String.valueOf(endTime),
+                String.valueOf(endTime - startTime),
+                "1",
+                "parentId",
+                List.of(),
+                List.of(),
+                null,
+                String.valueOf(startTime),
+                "1024",
+                "2000");
+
+        if (result != null)
+            stats.setQuery(toQueryStats(result));
+
+        return stats;
+    }
+
+    private static @NonNull JobStatistics2 toQueryStats(Postgres.QueryResult result) {
+        JobStatistics2 queryStats = new JobStatistics2();
+
+        TableSchema schema = new TableSchema();
+        List<TableFieldSchema> fields = new ArrayList<>();
+        for (Postgres.Column column : result.columns()) {
+            TableFieldSchema field = new TableFieldSchema();
+            field.setName(column.name());
+            field.setType(Fn.toBigQueryType(column.jdbcType()));
+            field.setMode("NULLABLE");
+            fields.add(field);
+        }
+        schema.setFields(fields);
+        queryStats.setSchema(schema);
+        return queryStats;
+    }
+
+    private static JobStatus toErrorStatus(String reason, String location, String message) {
+        ErrorProto err = new ErrorProto();
+        err.setReason(reason);
+        err.setLocation(location);
+        err.setMessage(message);
+
+        List<ErrorProto> errors = new ArrayList<>();
+        errors.add(err);
+
+        return new JobStatus(errors, "DONE");
     }
 }
