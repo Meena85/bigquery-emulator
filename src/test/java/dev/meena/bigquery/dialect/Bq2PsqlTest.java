@@ -35,7 +35,7 @@ class Bq2PsqlTest {
         Bq2Psql bq = new Bq2Psql();
 
         String translated = bq.translate("SELECT `id`, `value` FROM `projectID`.`public`.`table` WHERE `id` = 123", "defaultProj");
-        assertEquals("SELECT id, value\nFROM \"projectid|public\".table\nWHERE id = 123", translated);
+        assertEquals("SELECT id, value\nFROM \"projectid$public\".table\nWHERE id = 123", translated);
     }
 
     @Test
@@ -43,7 +43,7 @@ class Bq2PsqlTest {
         Bq2Psql bq = new Bq2Psql();
 
         String translated = bq.translate("SELECT id, val FROM project.public.`table_1` WHERE id = 123", "projectID2");
-        assertEquals("SELECT id, val\nFROM \"project|public\".table_1\nWHERE id = 123", translated);
+        assertEquals("SELECT id, val\nFROM \"project$public\".table_1\nWHERE id = 123", translated);
     }
 
     @Test
@@ -55,7 +55,7 @@ class Bq2PsqlTest {
 
         Bq2Psql.InsertAll bqInserts = bq.insertAll(request, "test", "public", "integration_test");
 
-        assertEquals("INSERT INTO \"test|public\".\"integration_test\" (\"num\", \"text\") VALUES (?, ?) ON CONFLICT DO NOTHING;", bqInserts.preparedSql());
+        assertEquals("INSERT INTO \"test$public\".\"integration_test\" (\"num\", \"text\") VALUES (?, ?) ON CONFLICT DO NOTHING;", bqInserts.preparedSql());
         assertArrayEquals(new Object[]{1, "test1"}, bqInserts.rows().get(0));
         assertArrayEquals(new Object[]{2, "test2"}, bqInserts.rows().get(1));
         assertArrayEquals(new Object[]{3, "test3"}, bqInserts.rows().get(2));
@@ -64,7 +64,7 @@ class Bq2PsqlTest {
     private static TableDataInsertAllRequestRowsInner row(int num, String value) {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("num", num);
-        row.put("value", value);
+        row.put("text", value);
 
         TableDataInsertAllRequestRowsInner rowContainer = new TableDataInsertAllRequestRowsInner();
         rowContainer.setInsertId("id");

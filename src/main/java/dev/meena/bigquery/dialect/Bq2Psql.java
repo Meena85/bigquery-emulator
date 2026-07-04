@@ -55,19 +55,7 @@ public class Bq2Psql implements SqlSyntaxConverter {
     }
 
     private static SqlNode rewriteTableIdentifiers(SqlNode sqlNode, String defaultProject) {
-        return sqlNode.accept(new SqlShuttle() {
-            @Override
-            public SqlNode visit(SqlCall call) {
-                if (call instanceof SqlSelect select) {
-                    SqlNode from = select.getFrom();
-                    if (from != null) {
-                        select.setFrom(rewriteFromNode(from, defaultProject));
-                    }
-                }
-
-                return super.visit(call);
-            }
-        });
+        return sqlNode.accept(new SqlSelectShuttle(defaultProject));
     }
 
     private static SqlNode rewriteFromNode(SqlNode from, String defaultProject) {
@@ -91,19 +79,7 @@ public class Bq2Psql implements SqlSyntaxConverter {
         }
 
         if (from instanceof SqlCall call) {
-            return call.accept(new SqlShuttle() {
-                @Override
-                public SqlNode visit(SqlCall nestedCall) {
-                    if (nestedCall instanceof SqlSelect nestedSelect) {
-                        SqlNode nestedFrom = nestedSelect.getFrom();
-                        if (nestedFrom != null) {
-                            nestedSelect.setFrom(rewriteFromNode(nestedFrom, defaultProject));
-                        }
-                    }
-
-                    return super.visit(nestedCall);
-                }
-            });
+            return call.accept(new SqlSelectShuttle(defaultProject));
         }
 
         return from;
@@ -116,7 +92,7 @@ public class Bq2Psql implements SqlSyntaxConverter {
             String table = identifier.names.get(2);
 
             return new SqlIdentifier(
-                    List.of(project.toLowerCase() + "|" + dataset.toLowerCase(), table),
+                    List.of(project.toLowerCase() + "$" + dataset.toLowerCase(), table),
                     identifier.getParserPosition()
             );
         }
@@ -126,7 +102,7 @@ public class Bq2Psql implements SqlSyntaxConverter {
             String table = identifier.names.get(1);
 
             return new SqlIdentifier(
-                    List.of(defaultProject.toLowerCase() + "|" + dataset.toLowerCase(), table),
+                    List.of(defaultProject.toLowerCase() + "$" + dataset.toLowerCase(), table),
                     identifier.getParserPosition()
             );
         }
@@ -187,5 +163,24 @@ public class Bq2Psql implements SqlSyntaxConverter {
         }
 
         return "\"" + identifier.replace("\"", "\"\"") + "\"";
+    }
+
+    private static class SqlSelectShuttle extends SqlShuttle {
+
+        private final String defaultProject;
+
+        public SqlSelectShuttle(String defaultProject) {
+            this.defaultProject = defaultProject;
+        }
+
+        @Override
+        public SqlNode visit(SqlCall call) {
+            if (call instanceof SqlSelect select) {
+                SqlNode from = select.getFrom();
+                if (from != null)
+                    select.setFrom(rewriteFromNode(from, defaultProject));
+            }
+            return super.visit(call);
+        }
     }
 }

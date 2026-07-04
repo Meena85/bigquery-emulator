@@ -1,18 +1,20 @@
 package dev.meena.bigquery.types;
 
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.ws.rs.core.Response;
 
 import java.util.List;
 
+@RegisterForReflection
 public class BigQueryError {
 
     public Err error;
     public List<ErrDetail> errors;
 
-    record Err(String message, int code, String status) {
+    public record Err(String message, int code, String status) {
     }
 
-    record ErrDetail(String message, String reason, String locationType) {
+    public record ErrDetail(String message, String reason, String locationType) {
     }
 
     public BigQueryError(String message, Response.Status status) {
@@ -22,5 +24,4 @@ public class BigQueryError {
                 status == Response.Status.BAD_REQUEST ? "invalidQuery" : "backendError",
                 "other"));
     }
-
 }

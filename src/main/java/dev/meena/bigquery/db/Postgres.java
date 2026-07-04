@@ -2,6 +2,7 @@ package dev.meena.bigquery.db;
 
 import dev.meena.bigquery.dialect.Bq2Psql;
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.postgresql.util.PGobject;
@@ -31,15 +32,15 @@ public class Postgres {
              Statement st = con.createStatement();
              ResultSet rs = st.executeQuery(query)) {
 
-            ResultSetMetaData rsmd = rs.getMetaData();
-            int numColumns = rsmd.getColumnCount();
+            ResultSetMetaData metaData = rs.getMetaData();
+            int numColumns = metaData.getColumnCount();
 
             List<Column> columns = new ArrayList<>();
             for (int i = 1; i <= numColumns; i++) {
                 columns.add(new Column(
-                        rsmd.getColumnLabel(i),
-                        rsmd.getColumnType(i),
-                        rsmd.getColumnTypeName(i)
+                        metaData.getColumnLabel(i),
+                        metaData.getColumnType(i),
+                        metaData.getColumnTypeName(i)
                 ));
             }
 
@@ -54,16 +55,56 @@ public class Postgres {
 
             return new QueryResult(columns, rows);
         } catch (SQLException ex) {
-            log.log(Level.SEVERE, "[QUERY] " + ex.getMessage());
-            return new QueryResult(Collections.emptyList(), Collections.emptyList());
+            log.log(Level.SEVERE, "[QUERY] query=" + query, ex);
+            throw new IllegalStateException("Unable to execute query, sql=" + query, ex);
+        }
+    }
+
+    public long count(String query) {
+        //noinspection SqlSourceToSinkFlow
+        try (Connection con = dataSource.getConnection();
+             Statement st = con.createStatement();
+             ResultSet rs = st.executeQuery(query)) {
+            if (rs.next())
+                return rs.getLong(1);
+            else
+                throw new IllegalStateException("Unable to count rows, query=" + query);
+        } catch (SQLException ex) {
+            log.log(Level.SEVERE, "[COUNT] table=" + query + ", error: " + ex.getMessage());
+            throw new IllegalStateException("Unable to count rows, sql=" + query, ex);
+        }
+    }
+
+    public boolean isEmpty(String tableName) {
+        //noinspection SqlSourceToSinkFlow
+        try (Connection con = dataSource.getConnection();
+             Statement st = con.createStatement();
+             ResultSet rs = st.executeQuery("SELECT NOT exists(SELECT 1 FROM " + tableName + ")")) {
+            if (rs.next())
+                return rs.getBoolean(1);
+            else
+                throw new IllegalStateException("Unable to count rows in table: " + tableName);
+        } catch (SQLException ex) {
+            log.log(Level.SEVERE, "[COUNT] " + tableName + "error: " + ex.getMessage());
+            throw new IllegalStateException("Unable to count rows in table: " + tableName, ex);
+        }
+    }
+
+    @SuppressWarnings("SqlSourceToSinkFlow")
+    public void execute(String sql) {
+        try (Connection con = dataSource.getConnection();
+             Statement st = con.createStatement()) {
+            st.execute(sql);
+        } catch (SQLException ex) {
+            log.log(Level.SEVERE, "[EXECUTE] " + ex.getMessage());
+            throw new IllegalStateException("Unable to execute SQL: " + ex.getMessage(), ex);
         }
     }
 
     @SuppressWarnings("SqlSourceToSinkFlow")
     public void insertAll(Bq2Psql.InsertAll insertAll) {
-        if (insertAll == null) {
+        if (insertAll == null)
             throw new IllegalArgumentException("Insert request is required");
-        }
 
         try (Connection con = dataSource.getConnection();
              PreparedStatement stmt = con.prepareStatement(insertAll.preparedSql())) {
@@ -81,73 +122,19 @@ public class Postgres {
                     String columnName = insertAll.columns().get(i);
                     ColumnDefinition columnDefinition = columnDefinitions.get(columnName.toLowerCase(Locale.ROOT));
 
-                    if (columnDefinition == null) {
+                    if (columnDefinition == null)
                         throw new IllegalArgumentException("Column not found: " + insertAll.schema() + "." + insertAll.table() + "." + columnName);
-                    }
 
                     setStatementValue(stmt, i + 1, row[i], columnDefinition);
                 }
 
                 int i = stmt.executeUpdate();
+                log.log(Level.INFO, "[INSERT] " + i + " row(s) inserted into " + insertAll.schema() + "." + insertAll.table());
             }
             con.commit();
         } catch (SQLException ex) {
             log.log(Level.SEVERE, "[INSERT] " + ex.getMessage());
             throw new IllegalStateException("Unable to insert rows: " + ex.getMessage(), ex);
-        }
-    }
-
-    public void logTablesAndColumns() {
-        String sql = """
-                SELECT
-                    table_schema,
-                    table_name,
-                    column_name,
-                    data_type,
-                    is_nullable,
-                    ordinal_position
-                FROM information_schema.columns
-                WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
-                  AND table_schema NOT LIKE 'pg_toast%'
-                ORDER BY table_schema, table_name, ordinal_position
-                """;
-
-        System.out.println("[DB SCHEMA] Tables and columns:");
-        log.info("[DB SCHEMA] Tables and columns:");
-        try (Connection con = dataSource.getConnection();
-             Statement st = con.createStatement();
-             ResultSet rs = st.executeQuery(sql)) {
-
-            String currentTable = null;
-            boolean foundAnyColumn = false;
-
-            int i = 0;
-            while (rs.next()) {
-                foundAnyColumn = true;
-
-                String schema = rs.getString("table_schema");
-                String table = rs.getString("table_name");
-                String tableKey = schema + "." + table;
-
-                if (!tableKey.equals(currentTable)) {
-                    currentTable = tableKey;
-                    log.info("[DB SCHEMA] " + tableKey);
-                }
-
-                log.info("[DB SCHEMA]   - "
-                        + rs.getString("column_name")
-                        + " "
-                        + rs.getString("data_type")
-                        + " nullable=" + rs.getString("is_nullable")
-                        + " ordinal=" + rs.getInt("ordinal_position"));
-                if (i++ == 6) break;
-            }
-
-            if (!foundAnyColumn) {
-                log.warning("[DB SCHEMA] No user tables/columns found");
-            }
-        } catch (SQLException ex) {
-            log.log(Level.SEVERE, "[DB SCHEMA] Unable to log tables and columns: " + ex.getMessage(), ex);
         }
     }
 
@@ -177,11 +164,11 @@ public class Postgres {
             return;
         }
 
-        String databaseTypeName = column.databaseTypeName() == null
-                ? ""
-                : column.databaseTypeName().toLowerCase(Locale.ROOT);
+        String databaseTypeName =
+                column.databaseTypeName() == null ? ""
+                        : column.databaseTypeName().toLowerCase(Locale.ROOT);
 
-        if ("json".equals(databaseTypeName) || "jsonb".equals(databaseTypeName)) {
+        if ("json".equalsIgnoreCase(databaseTypeName) || "jsonb".equalsIgnoreCase(databaseTypeName)) {
             PGobject json = new PGobject();
             json.setType(databaseTypeName);
             json.setValue(String.valueOf(value));
@@ -191,13 +178,12 @@ public class Postgres {
 
         switch (column.jdbcType()) {
             case Types.DATE -> {
-                if (value instanceof java.sql.Date date) {
+                if (value instanceof java.sql.Date date)
                     stmt.setDate(parameterIndex, date);
-                } else if (value instanceof LocalDate localDate) {
+                else if (value instanceof LocalDate localDate)
                     stmt.setDate(parameterIndex, Date.valueOf(localDate));
-                } else {
+                else
                     stmt.setDate(parameterIndex, Date.valueOf(String.valueOf(value)));
-                }
             }
             case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> {
                 switch (value) {
@@ -209,48 +195,42 @@ public class Postgres {
                 }
             }
             case Types.BOOLEAN, Types.BIT -> {
-                if (value instanceof Boolean bool) {
+                if (value instanceof Boolean bool)
                     stmt.setBoolean(parameterIndex, bool);
-                } else {
+                else
                     stmt.setBoolean(parameterIndex, Boolean.parseBoolean(String.valueOf(value)));
-                }
             }
             case Types.INTEGER, Types.SMALLINT, Types.TINYINT -> {
-                if (value instanceof Number number) {
+                if (value instanceof Number number)
                     stmt.setInt(parameterIndex, number.intValue());
-                } else {
+                else
                     stmt.setInt(parameterIndex, Integer.parseInt(String.valueOf(value)));
-                }
             }
             case Types.BIGINT -> {
-                if (value instanceof Number number) {
+                if (value instanceof Number number)
                     stmt.setLong(parameterIndex, number.longValue());
-                } else {
+                else
                     stmt.setLong(parameterIndex, Long.parseLong(String.valueOf(value)));
-                }
             }
             case Types.FLOAT, Types.REAL -> {
-                if (value instanceof Number number) {
+                if (value instanceof Number number)
                     stmt.setFloat(parameterIndex, number.floatValue());
-                } else {
+                else
                     stmt.setFloat(parameterIndex, Float.parseFloat(String.valueOf(value)));
-                }
             }
             case Types.DOUBLE -> {
-                if (value instanceof Number number) {
+                if (value instanceof Number number)
                     stmt.setDouble(parameterIndex, number.doubleValue());
-                } else {
+                else
                     stmt.setDouble(parameterIndex, Double.parseDouble(String.valueOf(value)));
-                }
             }
             case Types.NUMERIC, Types.DECIMAL -> {
-                if (value instanceof BigDecimal bigDecimal) {
+                if (value instanceof BigDecimal bigDecimal)
                     stmt.setBigDecimal(parameterIndex, bigDecimal);
-                } else if (value instanceof Number number) {
+                else if (value instanceof Number number)
                     stmt.setBigDecimal(parameterIndex, BigDecimal.valueOf(number.doubleValue()));
-                } else {
+                else
                     stmt.setBigDecimal(parameterIndex, new BigDecimal(String.valueOf(value)));
-                }
             }
             default -> stmt.setObject(parameterIndex, value, column.jdbcType());
         }
@@ -259,9 +239,11 @@ public class Postgres {
     private record ColumnDefinition(String name, int jdbcType, String databaseTypeName) {
     }
 
+    @RegisterForReflection
     public record QueryResult(List<Column> columns, List<List<Object>> rows) {
     }
 
+    @RegisterForReflection
     public record Column(String name, int jdbcType, String databaseTypeName) {
     }
 }

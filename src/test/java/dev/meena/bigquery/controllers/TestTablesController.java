@@ -26,13 +26,10 @@ import java.util.Map;
  */
 @QuarkusTest
 @QuarkusTestResource(StartPostgresContainers.class)
-public class TestBigqueryV2Controller {
+public class TestTablesController {
 
     private static final String projectId = "test";
     private static final String datasetId = "public";
-
-    @Inject
-    Postgres postgres;
 
     private static BigQuery bigQuery() {
         return BigQueryOptions.newBuilder()
@@ -44,46 +41,8 @@ public class TestBigqueryV2Controller {
                 .getService();
     }
 
-    private static @NonNull QueryJobConfiguration wrapInConfig(String query) {
+    private static @NonNull QueryJobConfiguration wrapInConfig(@SuppressWarnings("SameParameterValue") String query) {
         return QueryJobConfiguration.newBuilder(query).build();
-    }
-
-    @Test
-    void query() throws InterruptedException {
-        var bq = bigQuery();
-
-        String sql = "SELECT * FROM `public`.integration_test";
-        TableResult result = bq.query(wrapInConfig(sql));
-        FieldValueList row = result.iterateAll().iterator().next();
-
-        postgres.logTablesAndColumns();
-        Assertions.assertEquals("item 1", row.get(1).getStringValue());
-    }
-
-    @Test
-    void queryWithProject() throws InterruptedException {
-        var bq = bigQuery();
-
-        String sql = "SELECT * FROM `test`.`public`.integration_test";
-        TableResult result = bq.query(wrapInConfig(sql));
-        FieldValueList row = result.iterateAll().iterator().next();
-
-        Assertions.assertEquals("item 1", row.get(1).getStringValue());
-    }
-
-    @Test
-    void createJob() throws InterruptedException {
-        var bq = bigQuery();
-
-        String query = "SELECT * FROM `public`.integration_test";
-        Job job = bq.create(JobInfo.newBuilder(wrapInConfig(query)).build());
-
-        job.waitFor();
-
-        TableResult result = job.getQueryResults();
-        FieldValueList row = result.iterateAll().iterator().next();
-
-        Assertions.assertEquals("item 1", row.get(1).getStringValue());
     }
 
     @Test

@@ -1,0 +1,39 @@
+@projectId = local
+@jobId = 12345-abcd-12345
+
+### Hello
+GET http://localhost:9050
+
+### Translate
+POST http://localhost:9050
+Content-Type: application/x-www-form-urlencoded
+
+projectId = {{projectId}} &
+query = SELECT * FROM `udp`.DIM_PATIENT LIMIT 5
+
+### Create Job
+POST http://localhost:9050/bigquery/v2/projects/{{projectId}}/jobs
+Content-Type: application/json
+
+{
+  "jobReference": {
+    "jobId": "{{jobId}}",
+    "location": "US"
+  },
+  "configuration": {
+    "query": {
+      "query": "SELECT * FROM `udp`.DIM_PATIENT LIMIT 5",
+      "useLegacySql": false
+    }
+  }
+}
+
+### Query Job
+GET http://localhost:9050/bigquery/v2/projects/{{projectId}}/queries/{{jobId}}/getQueryResults
+Accept: application/json
+Content-Type: */*
+
+### Delete Job
+DELETE http://localhost:9050/bigquery/v2/projects/{{projectId}}/jobs/{{jobId}}/delete
+Accept: application/json
+Content-Type: */*
