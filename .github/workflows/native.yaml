@@ -1,0 +1,75 @@
+name: Quarkus Native Images
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Native Image (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          cache: 'maven'
+
+      - name: Build Native Binary
+        run: ./mvnw package -Dnative -DskipTests
+
+      - name: Prepare Binary Asset
+        run: |
+          mkdir -p dist
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            cp target/*-runner dist/quarkus-app-linux
+          else
+            cp target/*-runner dist/quarkus-app-macos
+          fi
+
+      - name: Upload Temporary Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-binary-${{ matrix.os }}
+          path: dist/quarkus-app-*
+          retention-days: 1
+
+  release:
+    name: Publish Rolling Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: all-artifacts
+          merge-multiple: true
+
+      - name: Create or Update Rolling Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Purging old release and tag to enforce exactly 2 downloads..."
+          gh release delete latest --yes --cleanup-tag || true
+
+          # Small pause to allow GitHub's backend to process the deletion
+          sleep 3
+
+          echo "Publishing fresh release with new binaries..."
+          gh release create latest all-artifacts/quarkus-app-* \
+            --title "Latest Native Binaries" \
+            --notes "Automated build of the latest Quarkus native binaries." \
+            --target main

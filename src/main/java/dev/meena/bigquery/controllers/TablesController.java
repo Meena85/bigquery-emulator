@@ -162,6 +162,15 @@ public class TablesController {
         }
     }
 
+    @POST
+    @Path("/projects/{projectId}/datasets/{datasetId}/tables")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response updateTables(
+            @PathParam("projectId") String projectId,
+            @PathParam("datasetId") String datasetId) {
+        return Fn.bigQueryError(Response.Status.NOT_IMPLEMENTED, "Not implemented");
+    }
+
     @GET
     @Path("/projects/{projectId}/datasets/{datasetId}/tables/{tableId}")
     @Produces(MediaType.APPLICATION_JSON)
