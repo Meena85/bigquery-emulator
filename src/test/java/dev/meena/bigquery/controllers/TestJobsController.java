@@ -71,6 +71,42 @@ public class TestJobsController {
         Assertions.assertEquals("item 1", row.get(1).getStringValue());
     }
 
+    @Test
+    void queryInformationSchema() throws InterruptedException {
+        var bq = bigQuery();
+
+        String sql = """
+                SELECT table_name, table_type
+                FROM information_schema.tables
+                WHERE table_schema = 'test$public'
+                  AND table_name = 'INTEGRATION_TEST'
+                  AND table_type IN ('BASE TABLE', 'VIEW')
+                LIMIT 1
+                """;
+        TableResult result = bq.query(wrapInConfig(sql));
+        FieldValueList row = result.iterateAll().iterator().next();
+
+        Assertions.assertEquals("integration_test", row.get(0).getStringValue());
+        Assertions.assertEquals("BASE TABLE", row.get(1).getStringValue());
+    }
+
+    @Test
+    void queriesEndpointDropTableReturnsEmptyResult() {
+        given()
+                .contentType(ContentType.JSON)
+                .body("""
+                        {
+                          "query": "DROP TABLE IF EXISTS `public`.`table_that_does_not_exist`"
+                        }
+                        """)
+                .when()
+                .post("/bigquery/v2/projects/{projectId}/queries", projectId)
+                .then()
+                .statusCode(200)
+                .body("totalRows", Matchers.equalTo("0"))
+                .body("schema", Matchers.notNullValue());
+    }
+
     /*
      * Verifies asynchronous job creation via BigQuery client and result retrieval through job polling.
      */
@@ -91,6 +127,23 @@ public class TestJobsController {
         }
 
         Assertions.assertEquals("item 1", value);
+    }
+
+    @Test
+    void createJobWithNullAndEmptyValues() throws InterruptedException {
+        var bq = bigQuery();
+
+        String query = "SELECT id, text, NULLIF(text, 'item 1') AS null_col, '' AS empty_col FROM `public`.integration_test";
+        Job job = bq.create(JobInfo.newBuilder(wrapInConfig(query)).build());
+
+        job.waitFor();
+
+        TableResult result = job.getQueryResults();
+        FieldValueList row = result.iterateAll().iterator().next();
+
+        Assertions.assertEquals("item 1", row.get(1).getStringValue());
+        Assertions.assertTrue(row.get(2).isNull());
+        Assertions.assertEquals("", row.get(3).getStringValue());
     }
 
     /*
@@ -200,6 +253,52 @@ public class TestJobsController {
                 .body("jobReference.jobId", Matchers.equalTo(jobId))
                 .body("configuration.query.writeDisposition", Matchers.equalTo("WRITE_EMPTY"))
                 .body("configuration.query.createDisposition", Matchers.equalTo("CREATE_IF_NEEDED"));
+    }
+
+    @Test
+    void createJobWithDropTableQueryReturnsEmptyResults() {
+        String jobId = uniqueId("drop-job");
+        String query = "DROP TABLE IF EXISTS `public`.`table_that_does_not_exist`";
+
+        given()
+                .contentType(ContentType.JSON)
+                .body(jobPayload(jobId, query))
+                .when()
+                .post("/bigquery/v2/projects/{projectId}/jobs", projectId)
+                .then()
+                .statusCode(200)
+                .body("jobReference.jobId", Matchers.equalTo(jobId));
+
+        given()
+                .when()
+                .get("/bigquery/v2/projects/{projectId}/queries/{jobId}", projectId, jobId)
+                .then()
+                .statusCode(200)
+                .body("jobReference.jobId", Matchers.equalTo(jobId))
+                .body("totalRows", Matchers.equalTo("0"));
+    }
+
+    @Test
+    void createJobWithCreateTableQueryReturnsEmptyResults() {
+        String jobId = uniqueId("create-job");
+        String query = "CREATE TABLE IF NOT EXISTS `public`.`created_by_job` AS SELECT 1 as id";
+
+        given()
+                .contentType(ContentType.JSON)
+                .body(jobPayload(jobId, query))
+                .when()
+                .post("/bigquery/v2/projects/{projectId}/jobs", projectId)
+                .then()
+                .statusCode(200)
+                .body("jobReference.jobId", Matchers.equalTo(jobId));
+
+        given()
+                .when()
+                .get("/bigquery/v2/projects/{projectId}/queries/{jobId}", projectId, jobId)
+                .then()
+                .statusCode(200)
+                .body("jobReference.jobId", Matchers.equalTo(jobId))
+                .body("totalRows", Matchers.equalTo("0"));
     }
 
     /*

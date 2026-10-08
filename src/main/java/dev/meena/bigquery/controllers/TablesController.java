@@ -44,7 +44,9 @@ public class TablesController {
             return Fn.bigQueryError(Response.Status.BAD_REQUEST, "'rows' parameter is required");
 
         try {
-            postgres.insertAll(bq.insertAll(requestBody, projectId, datasetId, tableId));
+            String schema = Fn.toSchema(projectId, datasetId);
+            String actualTable = postgres.resolveTableName(schema, tableId);
+            postgres.insertAll(bq.insertAll(requestBody, projectId, datasetId, actualTable != null ? actualTable : tableId));
             return Response.ok(new TableDataInsertAllResponse()).build();
         } catch (RuntimeException e) {
             log.log(Level.SEVERE, "Error inserting data into Postgres: " + e.getMessage(), e);
@@ -75,8 +77,12 @@ public class TablesController {
         long offset = startIndex == null || startIndex < 0 ? 0 : startIndex;
         long limit = maxResults == null || maxResults <= 0 ? 5_000 : maxResults;
 
-        String sql = "SELECT * FROM " + Fn.pgQuote(Fn.toSchema(projectId, datasetId))
-                + "." + Fn.pgQuote(tableId)
+        String schema = Fn.toSchema(projectId, datasetId);
+        String actualTable = postgres.resolveTableName(schema, tableId);
+        String targetTable = actualTable != null ? actualTable : tableId;
+
+        String sql = "SELECT * FROM " + Fn.pgQuote(schema)
+                + "." + Fn.pgQuote(targetTable)
                 + " OFFSET " + offset
                 + " LIMIT " + limit;
 
@@ -102,23 +108,24 @@ public class TablesController {
         int offset = parsePageToken(pageToken);
         int limit = maxResults == null || maxResults <= 0 ? 1_000 : maxResults;
         int fetchLimit = limit + 1;
+        String schema = Fn.toSchema(projectId, datasetId);
 
         String tableSql = """
                 SELECT table_name, table_type
                 FROM information_schema.tables
-                WHERE table_schema = '%s'
+                WHERE LOWER(table_schema) = LOWER('%s')
                   AND table_type IN ('BASE TABLE', 'VIEW')
                 ORDER BY table_name
                 OFFSET %d
                 LIMIT %d
-                """.formatted(escapeSqlLiteral(datasetId), offset, fetchLimit);
+                """.formatted(escapeSqlLiteral(schema), offset, fetchLimit);
 
         String countSql = """
                 SELECT COUNT(*) AS total_items
                 FROM information_schema.tables
-                WHERE table_schema = '%s'
+                WHERE LOWER(table_schema) = LOWER('%s')
                   AND table_type IN ('BASE TABLE', 'VIEW')
-                """.formatted(escapeSqlLiteral(datasetId));
+                """.formatted(escapeSqlLiteral(schema));
 
         try {
             Postgres.QueryResult tableResult = postgres.query(tableSql);
@@ -180,27 +187,15 @@ public class TablesController {
             @PathParam("tableId") String tableId,
             @QueryParam("selectedFields") String selectedFields,
             @QueryParam("view") String view) {
+        String pgSchema = Fn.toSchema(projectId, datasetId);
         String tableSql = """
                 SELECT table_name, table_type
                 FROM information_schema.tables
-                WHERE table_schema = '%s'
-                  AND table_name = '%s'
+                WHERE LOWER(table_schema) = LOWER('%s')
+                  AND LOWER(table_name) = LOWER('%s')
                   AND table_type IN ('BASE TABLE', 'VIEW')
                 LIMIT 1
-                """.formatted(escapeSqlLiteral(Fn.toSchema(projectId, datasetId)), escapeSqlLiteral(tableId));
-
-        String columnsSql = """
-                SELECT column_name, data_type, is_nullable, ordinal_position
-                FROM information_schema.columns
-                WHERE table_schema = '%s'
-                  AND table_name = '%s'
-                ORDER BY ordinal_position
-                """.formatted(escapeSqlLiteral(Fn.toSchema(projectId, datasetId)), escapeSqlLiteral(tableId));
-
-        String rowCountSql = """
-                SELECT COUNT(*) AS row_count
-                FROM %s.%s
-                """.formatted(Fn.pgQuote(Fn.toSchema(projectId, datasetId)), Fn.pgQuote(tableId));
+                """.formatted(escapeSqlLiteral(pgSchema), escapeSqlLiteral(tableId));
 
         try {
             Postgres.QueryResult tableResult = postgres.query(tableSql);
@@ -212,8 +207,22 @@ public class TablesController {
             }
 
             List<Object> tableRow = tableResult.rows().getFirst();
+            String actualTableName = String.valueOf(tableRow.get(0));
             String postgresTableType = String.valueOf(tableRow.get(1));
             String bigQueryTableType = "VIEW".equalsIgnoreCase(postgresTableType) ? "VIEW" : "TABLE";
+
+            String columnsSql = """
+                    SELECT column_name, data_type, is_nullable, ordinal_position
+                    FROM information_schema.columns
+                    WHERE LOWER(table_schema) = LOWER('%s')
+                      AND LOWER(table_name) = LOWER('%s')
+                    ORDER BY ordinal_position
+                    """.formatted(escapeSqlLiteral(pgSchema), escapeSqlLiteral(actualTableName));
+
+            String rowCountSql = """
+                    SELECT COUNT(*) AS row_count
+                    FROM %s.%s
+                    """.formatted(Fn.pgQuote(pgSchema), Fn.pgQuote(actualTableName));
 
             Postgres.QueryResult columnsResult = postgres.query(columnsSql);
             Postgres.QueryResult rowCountResult = postgres.query(rowCountSql);

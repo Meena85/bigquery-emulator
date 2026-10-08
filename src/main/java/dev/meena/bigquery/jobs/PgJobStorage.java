@@ -18,6 +18,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -138,13 +139,18 @@ public class PgJobStorage {
             return null;
 
         String schema = getSchema(details);
-        String sql = """
-                SELECT * FROM "%s"."%s"
-                """.formatted(schema, details.destinationTableId());
-
-        Postgres.QueryResult result = postgres.query(sql);
-        if (result == null)
+        String actualTable = postgres.resolveTableName(schema, details.destinationTableId());
+        Postgres.QueryResult result;
+        if (actualTable == null) {
             result = new Postgres.QueryResult(List.of(), List.of());
+        } else {
+            String sql = """
+                    SELECT * FROM "%s"."%s"
+                    """.formatted(schema, actualTable);
+            result = postgres.query(sql);
+            if (result == null)
+                result = new Postgres.QueryResult(List.of(), List.of());
+        }
 
         return Fn.queryResultsResponse(
                 details.projectId(),
@@ -156,10 +162,13 @@ public class PgJobStorage {
 
     public Postgres.QueryResult selectAll(TableReference destinationTable) {
         String schema = Fn.toSchema(destinationTable.getProjectId(), destinationTable.getDatasetId());
-        String table = destinationTable.getTableId();
+        String actualTable = postgres.resolveTableName(schema, destinationTable.getTableId());
+        if (actualTable == null)
+            return new Postgres.QueryResult(List.of(), List.of());
+
         String sql = """
                 SELECT * FROM "%s"."%s"
-                """.formatted(schema, table);
+                """.formatted(schema, actualTable);
         return postgres.query(sql);
     }
 
@@ -170,9 +179,11 @@ public class PgJobStorage {
 
         try (Connection con = dataSource.getConnection()) {
             String schema = getSchema(jobDetails);
+            String actualTable = postgres.resolveTableName(schema, jobDetails.destinationTableId());
+            String tableToDrop = actualTable != null ? actualTable : jobDetails.destinationTableId();
             con.prepareCall("""
                             DROP TABLE IF EXISTS "%s"."%s"
-                            """.formatted(schema, jobDetails.destinationTableId()))
+                            """.formatted(schema, tableToDrop))
                     .execute();
 
             String sql = """
@@ -191,11 +202,17 @@ public class PgJobStorage {
                                        String translatedSql,
                                        Disposition writeDisposition,
                                        Disposition createDisposition) {
+        if (isDdlStatement(translatedSql)) {
+            postgres.execute(translatedSql);
+            return;
+        }
+
         String schema = Fn.toSchema(destinationTable.getProjectId(), destinationTable.getDatasetId());
-        String table = destinationTable.getTableId();
+        String existingTable = postgres.resolveTableName(schema, destinationTable.getTableId());
+        boolean tableExists = existingTable != null;
+        String table = tableExists ? existingTable : destinationTable.getTableId();
         String quotedTable = Fn.pgQuote(schema) + "." + Fn.pgQuote(table);
 
-        boolean tableExists = tableExists(schema, table);
         boolean tableHasRows = tableExists && !postgres.isEmpty(quotedTable);
 
         if (Disposition.CREATE_NEVER == createDisposition && !tableExists)
@@ -233,16 +250,6 @@ public class PgJobStorage {
             }
             default -> throw new IllegalArgumentException("Unsupported writeDisposition: " + writeDisposition);
         }
-    }
-
-    private boolean tableExists(String schema, String table) {
-        String sql = """
-                SELECT COUNT(*)
-                FROM information_schema.tables
-                WHERE table_schema = '%s'
-                  AND table_name = '%s'
-                """.formatted(Fn.escapeSqlLiteral(schema), Fn.escapeSqlLiteral(table));
-        return postgres.count(sql) > 0;
     }
 
     private JobDetails jobDetails(String projectId, String jobId) {
@@ -345,6 +352,15 @@ public class PgJobStorage {
 
     private static @Nullable String getSchema(JobDetails jobDetails) {
         return Fn.toSchema(jobDetails.destinationProjectId(), jobDetails.destinationDatasetId());
+    }
+
+    private static boolean isDdlStatement(String sql) {
+        if (sql == null) return false;
+        String normalized = sql.stripLeading().toLowerCase(Locale.ROOT);
+        return normalized.startsWith("drop table ")
+                || normalized.startsWith("create table ")
+                || normalized.startsWith("update ")
+                || normalized.startsWith("create or replace table ");
     }
 
     private record JobDetails(

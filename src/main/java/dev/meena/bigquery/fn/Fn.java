@@ -57,6 +57,7 @@ public class Fn {
      */
     public static String toSchema(String projectID, String schema) {
         if (projectID == null || schema == null) return schema;
+        if ("information_schema".equalsIgnoreCase(schema)) return "information_schema";
         return projectID.toLowerCase() + "$" + schema.toLowerCase();
     }
 
@@ -131,5 +132,12 @@ public class Fn {
 
     public static String escapeSqlLiteral(String value) {
         return value == null ? "" : value.replace("'", "''");
+    }
+
+    public static String removeSemiColon(String sql) {
+        if (sql != null && sql.endsWith(";"))
+            return sql.substring(0, sql.length() - 1);
+
+        return sql;
     }
 }

@@ -28,32 +28,38 @@ public class Postgres {
 
     @SuppressWarnings("SqlSourceToSinkFlow")
     public QueryResult query(String query) {
+        log.log(Level.INFO, "[SQL] {0}", query);
         try (Connection con = dataSource.getConnection();
-             Statement st = con.createStatement();
-             ResultSet rs = st.executeQuery(query)) {
-
-            ResultSetMetaData metaData = rs.getMetaData();
-            int numColumns = metaData.getColumnCount();
-
-            List<Column> columns = new ArrayList<>();
-            for (int i = 1; i <= numColumns; i++) {
-                columns.add(new Column(
-                        metaData.getColumnLabel(i),
-                        metaData.getColumnType(i),
-                        metaData.getColumnTypeName(i)
-                ));
+             Statement st = con.createStatement()) {
+            boolean hasResultSet = st.execute(query);
+            if (!hasResultSet) {
+                return new QueryResult(List.of(), List.of());
             }
 
-            List<List<Object>> rows = new ArrayList<>();
-            while (rs.next()) {
-                List<Object> row = new ArrayList<>();
+            try (ResultSet rs = st.getResultSet()) {
+                ResultSetMetaData metaData = rs.getMetaData();
+                int numColumns = metaData.getColumnCount();
+
+                List<Column> columns = new ArrayList<>();
                 for (int i = 1; i <= numColumns; i++) {
-                    row.add(rs.getObject(i));
+                    columns.add(new Column(
+                            metaData.getColumnLabel(i),
+                            metaData.getColumnType(i),
+                            metaData.getColumnTypeName(i)
+                    ));
                 }
-                rows.add(row);
-            }
 
-            return new QueryResult(columns, rows);
+                List<List<Object>> rows = new ArrayList<>();
+                while (rs.next()) {
+                    List<Object> row = new ArrayList<>();
+                    for (int i = 1; i <= numColumns; i++) {
+                        row.add(rs.getObject(i));
+                    }
+                    rows.add(row);
+                }
+
+                return new QueryResult(columns, rows);
+            }
         } catch (SQLException ex) {
             log.log(Level.SEVERE, "[QUERY] query=" + query, ex);
             throw new IllegalStateException("Unable to execute query, sql=" + query, ex);
@@ -87,6 +93,31 @@ public class Postgres {
         } catch (SQLException ex) {
             log.log(Level.SEVERE, "[COUNT] " + tableName + "error: " + ex.getMessage());
             throw new IllegalStateException("Unable to count rows in table: " + tableName, ex);
+        }
+    }
+
+    public String resolveTableName(String schema, String table) {
+        if (schema == null || table == null) return null;
+        String sql = """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE LOWER(table_schema) = LOWER(?)
+                  AND LOWER(table_name) = LOWER(?)
+                LIMIT 1
+                """;
+        try (Connection con = dataSource.getConnection();
+             PreparedStatement stmt = con.prepareStatement(sql)) {
+            stmt.setString(1, schema);
+            stmt.setString(2, table);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString(1);
+                }
+                return null;
+            }
+        } catch (SQLException ex) {
+            log.log(Level.SEVERE, "[RESOLVE_TABLE] " + schema + "." + table + " error: " + ex.getMessage());
+            throw new IllegalStateException("Unable to resolve table: " + schema + "." + table, ex);
         }
     }
 

@@ -60,4 +60,13 @@ public class TestTablesController {
 
         Assertions.assertEquals(5L, row.getFirst().getLongValue());
     }
+
+    @Test
+    void getTableCaseInsensitive() {
+        var bq = bigQuery();
+        Table table = bq.getTable(TableId.of(projectId, datasetId, "INTEGRATION_TEST"));
+        Assertions.assertNotNull(table);
+        Assertions.assertEquals("INTEGRATION_TEST", table.getTableId().getTable());
+        Assertions.assertEquals(TableDefinition.Type.TABLE, table.getDefinition().getType());
+    }
 }

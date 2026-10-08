@@ -2,7 +2,7 @@ name: Quarkus Native Images
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -24,12 +24,12 @@ jobs:
       - name: Set up GraalVM
         uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '25'
-          distribution: 'graalvm'
-          cache: 'maven'
+          java-version: "25"
+          distribution: "graalvm"
+          cache: "maven"
 
       - name: Build Native Binary
-        run: ./mvnw package -Dnative -DskipTests
+        run: ./mvnw --batch-mode --quiet clean package -Dnative -DskipTests
 
       - name: Prepare Binary Asset
         run: |
@@ -43,15 +43,18 @@ jobs:
       - name: Upload Temporary Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: native-binary-${{ matrix.os }}
+          name: bigquery-emulator-${{ matrix.os }}
           path: dist/quarkus-app-*
-          retention-days: 1
+          retention-days: 2
 
   release:
     name: Publish Rolling Release
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
       - name: Download All Artifacts
         uses: actions/download-artifact@v8
         with:
