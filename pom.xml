@@ -15,7 +15,8 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
-        <quarkus.platform.version>3.37.1</quarkus.platform.version>
+        <quarkus.platform.version>3.40.1</quarkus.platform.version>
+        <google-http-client.version>2.2.0</google-http-client.version>
         <skipITs>true</skipITs>
         <surefire-plugin.version>3.5.4</surefire-plugin.version>
         <testcontainers.version>2.0.5</testcontainers.version>
@@ -23,6 +24,14 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Quarkus' BOM pins google-http-client to 1.47.x, which is too old for google-cloud-bigquery (test scope) -->
+            <dependency>
+                <groupId>com.google.http-client</groupId>
+                <artifactId>google-http-client-bom</artifactId>
+                <version>${google-http-client.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>${quarkus.platform.group-id}</groupId>
                 <artifactId>quarkus-bom</artifactId>
@@ -54,7 +63,7 @@
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <version>42.7.11</version>
+            <version>42.7.14</version>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -97,7 +106,7 @@
         <dependency>
             <groupId>com.google.cloud</groupId>
             <artifactId>google-cloud-bigquery</artifactId>
-            <version>2.66.0</version>
+            <version>2.73.0</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -159,37 +168,49 @@
                     </systemPropertyVariables>
                 </configuration>
             </plugin>
-            <plugin>
-                <groupId>org.openapitools</groupId>
-                <artifactId>openapi-generator-maven-plugin</artifactId>
-                <version>7.22.0</version>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>generate</goal>
-                        </goals>
-                        <configuration>
-                            <inputSpec>${project.basedir}/src/main/resources/bigquery-openapi.yaml</inputSpec>
-                            <generatorName>java</generatorName>
-                            <generateApis>false</generateApis>
-                            <generateModelTests>false</generateModelTests>
-                            <generateSupportingFiles>false</generateSupportingFiles>
-                            <modelPackage>dev.meena.bigquery.model</modelPackage>
-                            <skipIfSpecIsUnchanged>true</skipIfSpecIsUnchanged>
-                            <configOptions>
-                                <interfaceOnly>false</interfaceOnly>
-                                <returnResponse>true</returnResponse>
-                                <useJakartaEe>true</useJakartaEe>
-                                <sourceFolder>src/gen/java/main</sourceFolder>
-                            </configOptions>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
         </plugins>
     </build>
 
     <profiles>
+        <profile>
+            <!-- Regenerates src/main/java/dev/meena/bigquery/model from the OpenAPI spec.
+                 Run only when bigquery-openapi.yaml changes: ./mvnw generate-sources -Pgenerate-models -->
+            <id>generate-models</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.openapitools</groupId>
+                        <artifactId>openapi-generator-maven-plugin</artifactId>
+                        <version>7.22.0</version>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>generate</goal>
+                                </goals>
+                                <configuration>
+                                    <inputSpec>${project.basedir}/src/main/resources/bigquery-openapi.yaml</inputSpec>
+                                    <generatorName>java</generatorName>
+                                    <output>${project.basedir}</output>
+                                    <generateApis>false</generateApis>
+                                    <generateModelTests>false</generateModelTests>
+                                    <generateModelDocumentation>false</generateModelDocumentation>
+                                    <generateSupportingFiles>false</generateSupportingFiles>
+                                    <modelPackage>dev.meena.bigquery.model</modelPackage>
+                                    <skipIfSpecIsUnchanged>false</skipIfSpecIsUnchanged>
+                                    <addCompileSourceRoot>false</addCompileSourceRoot>
+                                    <configOptions>
+                                        <useJakartaEe>true</useJakartaEe>
+                                        <hideGenerationTimestamp>true</hideGenerationTimestamp>
+                                        <sourceFolder>src/main/java</sourceFolder>
+                                        <additionalModelTypeAnnotations>@io.quarkus.runtime.annotations.RegisterForReflection(ignoreNested = false)</additionalModelTypeAnnotations>
+                                    </configOptions>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <profile>
             <id>native</id>
             <activation>

@@ -5,8 +5,7 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 @RegisterForReflection(
         classNames = {
                 "org.apache.calcite.jdbc.CalciteJdbc41Factory",
-                "org.apache.calcite.avatica.AvaticaJdbc41Factory",
-                "dev.meena.bigquery.model.*"
+                "org.apache.calcite.avatica.AvaticaJdbc41Factory"
         }
 )
 public class CalciteNativeReflectionConfig {

@@ -4,24 +4,25 @@ import dev.meena.bigquery.db.Postgres;
 import dev.meena.bigquery.model.*;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.ws.rs.core.Response;
+import org.apache.calcite.sql.parser.SqlParseException;
 
 import java.sql.Types;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.util.ArrayList;
 import java.util.List;
 
 import static org.apache.commons.lang3.StringUtils.isBlank;
 
 public class Fn {
 
-    @RegisterForReflection
+    /** BigQuery's standard error envelope: {"error": {code, message, status, errors: [...]}}. */
+    @RegisterForReflection(ignoreNested = false)
     public record ErrorResponse(Error error) {
         public record Error(int code, String message, String status, List<Detail> errors) {
         }
 
-        public record Detail(String reason, String message, String locationType) {
+        public record Detail(String message, String domain, String reason, String locationType) {
         }
     }
 
@@ -62,76 +63,106 @@ public class Fn {
     }
 
     public static Response bigQueryError(Response.Status status, String message) {
-        ErrorResponse.Detail detail = new ErrorResponse.Detail(
-                status == Response.Status.BAD_REQUEST ? "invalidQuery" : "backendError",
-                message,
-                "other"
-        );
-        ErrorResponse.Error error = new ErrorResponse.Error(
-                status.getStatusCode(),
-                message,
-                status.name(),
-                List.of(detail)
-        );
+        return bigQueryError(status, message, defaultReason(status));
+    }
+
+    public static Response bigQueryError(Response.Status status, String message, String reason) {
+        var detail = new ErrorResponse.Detail(message, "global", reason, "other");
+        var error = new ErrorResponse.Error(status.getStatusCode(), message, googleStatus(status), List.of(detail));
         return Response.status(status).entity(new ErrorResponse(error)).build();
     }
 
-    public static GetQueryResultsResponse queryResultsResponse(String projectId,
-                                                               String jobId,
-                                                               String location,
+    /**
+     * Map an exception to a BigQuery error response: SQL syntax problems are 400 {@code invalidQuery},
+     * "Not found: ..." is 404, "Already Exists: ..." is 409 and anything else is a 500.
+     */
+    public static Response toError(Exception e) {
+        String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        return switch (e) {
+            case SqlParseException ignored -> bigQueryError(Response.Status.BAD_REQUEST, message, "invalidQuery");
+            case IllegalArgumentException ignored -> bigQueryError(Response.Status.BAD_REQUEST, message, "invalid");
+            default -> {
+                if (message.startsWith("Not found")) yield bigQueryError(Response.Status.NOT_FOUND, message);
+                if (message.startsWith("Already Exists")) yield bigQueryError(Response.Status.CONFLICT, message);
+                yield bigQueryError(Response.Status.INTERNAL_SERVER_ERROR, message);
+            }
+        };
+    }
+
+    private static String defaultReason(Response.Status status) {
+        return switch (status) {
+            case BAD_REQUEST -> "invalid";
+            case NOT_FOUND -> "notFound";
+            case CONFLICT -> "duplicate";
+            case NOT_IMPLEMENTED -> "notImplemented";
+            default -> "backendError";
+        };
+    }
+
+    private static String googleStatus(Response.Status status) {
+        return switch (status) {
+            case BAD_REQUEST -> "INVALID_ARGUMENT";
+            case NOT_FOUND -> "NOT_FOUND";
+            case CONFLICT -> "ALREADY_EXISTS";
+            case NOT_IMPLEMENTED -> "UNIMPLEMENTED";
+            default -> "INTERNAL";
+        };
+    }
+
+    public static GetQueryResultsResponse queryResultsResponse(String projectId, String jobId, String location,
                                                                Postgres.QueryResult result) {
         var r = new GetQueryResultsResponse(null, null);
         r.setEtag("\"" + jobId + "\"");
         r.setJobComplete(true);
-        r.setTotalRows(String.valueOf(result.rows().size()));
         r.setCacheHit(false);
+        r.setTotalRows(String.valueOf(result.rows().size()));
+        r.setJobReference(jobReference(projectId, jobId, location));
+        r.setSchema(tableSchema(result.columns()));
+        r.setRows(tableRows(result.rows()));
+        return r;
+    }
 
+    /** Response of the synchronous {@code POST /queries} call. */
+    public static QueryResponse queryResponse(String projectId, String jobId, String location,
+                                              Postgres.QueryResult result) {
+        var r = new QueryResponse(null, null);
+        r.setJobComplete(true);
+        r.setCacheHit(false);
+        r.setTotalRows(String.valueOf(result.rows().size()));
+        r.setJobReference(jobReference(projectId, jobId, location));
+        r.setSchema(tableSchema(result.columns()));
+        r.setRows(tableRows(result.rows()));
+        return r;
+    }
+
+    public static JobReference jobReference(String projectId, String jobId, String location) {
         var jobRef = new JobReference();
         jobRef.setProjectId(projectId);
         jobRef.setJobId(jobId);
         jobRef.setLocation(location);
-        r.setJobReference(jobRef);
+        return jobRef;
+    }
 
-        if (r.getRows() == null)
-            r.setRows(new ArrayList<>());
-
-        for (List<Object> sourceRow : result.rows()) {
-            var row = new TableRow();
-            if (row.getF() == null)
-                row.setF(new ArrayList<>());
-            for (Object rawValue : sourceRow) {
-                var cell = new TableCell();
-                cell.setV(Fn.toBigQueryValue(rawValue));
-                row.getF().add(cell);
-            }
-            r.getRows().add(row);
-        }
-
+    public static TableSchema tableSchema(List<Postgres.Column> columns) {
         var schema = new TableSchema();
-        r.setSchema(schema);
+        schema.setFields(columns.stream().map(column -> new TableFieldSchema()
+                .name(column.name())
+                .type(toBigQueryType(column.jdbcType()))
+                .mode("NULLABLE")).toList());
+        return schema;
+    }
 
-        if (schema.getFields() == null)
-            schema.setFields(new ArrayList<>());
-
-        for (Postgres.Column column : result.columns()) {
-            var field = new TableFieldSchema();
-            field.setName(column.name());
-            field.setType(Fn.toBigQueryType(column.jdbcType()));
-            field.setMode("NULLABLE");
-            field.setFields(null);
-            schema.getFields().add(field);
-        }
-
-        return r;
+    public static List<TableRow> tableRows(List<List<Object>> rows) {
+        return rows.stream()
+                .map(source -> new TableRow().f(source.stream()
+                        .map(value -> new TableCell().v(toBigQueryValue(value)))
+                        .toList()))
+                .toList();
     }
 
     public static String pgQuote(String identifier) {
         if (isBlank(identifier)) return "\"\"";
         return "\"" + identifier.replace("\"", "\"\"") + "\"";
-    }
-
-    public static String escapeSqlLiteral(String value) {
-        return value == null ? "" : value.replace("'", "''");
     }
 
     public static String removeSemiColon(String sql) {

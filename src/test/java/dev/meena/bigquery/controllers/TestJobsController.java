@@ -21,7 +21,7 @@ import java.util.zip.GZIPOutputStream;
 import static io.restassured.RestAssured.given;
 
 /*
- * Test {@link JobsController} endpoints
+ * Test {@link JobController} and {@link QueryController} endpoints
  */
 @QuarkusTest
 @QuarkusTestResource(StartPostgresContainers.class)
@@ -192,6 +192,41 @@ public class TestJobsController {
     }
 
     /*
+     * Verifies POST /queries answers with a queryResponse that has a schema, rows and a job reference.
+     */
+    @Test
+    void queriesEndpointReturnsQueryResponse() {
+        given()
+                .contentType(ContentType.JSON)
+                .body("{\"query\": \"SELECT text FROM `public`.integration_test ORDER BY id\", \"useLegacySql\": false}")
+                .when()
+                .post("/bigquery/v2/projects/{projectId}/queries", projectId)
+                .then()
+                .statusCode(200)
+                .body("kind", Matchers.equalTo("bigquery#queryResponse"))
+                .body("jobComplete", Matchers.equalTo(true))
+                .body("jobReference.jobId", Matchers.startsWith("job_"))
+                .body("schema.fields[0].name", Matchers.equalTo("text"))
+                .body("rows[0].f[0].v", Matchers.equalTo("item 1"));
+    }
+
+    /*
+     * Verifies a SQL syntax error is reported as a 400 invalidQuery in BigQuery's error envelope.
+     */
+    @Test
+    void queriesEndpointReturnsInvalidQueryForSyntaxError() {
+        given()
+                .contentType(ContentType.JSON)
+                .body("{\"query\": \"SELEC nope FROM\"}")
+                .when()
+                .post("/bigquery/v2/projects/{projectId}/queries", projectId)
+                .then()
+                .statusCode(400)
+                .body("error.status", Matchers.equalTo("INVALID_ARGUMENT"))
+                .body("error.errors[0].reason", Matchers.equalTo("invalidQuery"));
+    }
+
+    /*
      * Verifies validation for missing query text in POST /queries requests.
      */
     @Test
@@ -231,7 +266,7 @@ public class TestJobsController {
                 .get("/bigquery/v2/projects/{projectId}/queries/{jobId}", projectId, missingJobId)
                 .then()
                 .statusCode(404)
-                .body("error.message", Matchers.startsWith("Not found: Job " + missingJobId));
+                .body("error.message", Matchers.equalTo("Not found: Job " + projectId + ":" + missingJobId));
     }
 
     /*

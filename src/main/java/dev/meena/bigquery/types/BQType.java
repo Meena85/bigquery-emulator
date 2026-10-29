@@ -5,9 +5,6 @@ import dev.meena.bigquery.fn.Fn;
 import dev.meena.bigquery.jobs.PgJobStorage;
 import dev.meena.bigquery.model.*;
 
-import java.util.ArrayList;
-import java.util.List;
-
 public class BQType {
 
     public static String etag(String projectId, String datasetId, String tableId) {
@@ -39,21 +36,8 @@ public class BQType {
     }
 
     public static TableDataList tableDataList(Postgres.QueryResult result) {
-        List<TableRow> rows = new ArrayList<>();
-        for (List<Object> sourceRow : result.rows()) {
-            List<TableCell> values = sourceRow.stream().map(rawValue -> {
-                TableCell value = new TableCell();
-                value.setV(Fn.toBigQueryValue(rawValue));
-                return value;
-            }).toList();
-
-            TableRow row = new TableRow();
-            row.setF(values);
-            rows.add(row);
-        }
-
         return new TableDataList()
                 .totalRows(String.valueOf(result.rows().size()))
-                .rows(rows);
+                .rows(Fn.tableRows(result.rows()));
     }
 }

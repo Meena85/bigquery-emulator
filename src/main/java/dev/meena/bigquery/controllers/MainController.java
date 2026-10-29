@@ -16,6 +16,9 @@ public class MainController {
     @Inject
     Postgres postgres;
 
+    @Inject
+    Bq2Psql bq2Psql;
+
     @GET
     @Produces(MediaType.TEXT_PLAIN)
     public String hello() {
@@ -31,7 +34,6 @@ public class MainController {
         if (query == null || query.isEmpty())
             return Response.ok(new TranslateResult(query, null, "'query' parameter is required")).build();
 
-        var bq2Psql = new Bq2Psql();
         try {
             Postgres.QueryResult result = postgres.query(bq2Psql.translate(query, projectId));
             return Response.ok(Objects.requireNonNullElseGet(result, () -> new TranslateResult(query, null, "Query failed"))).build();

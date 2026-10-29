@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 
-mvn clean package generate-sources -DskipTests
+./mvnw clean package -DskipTests
