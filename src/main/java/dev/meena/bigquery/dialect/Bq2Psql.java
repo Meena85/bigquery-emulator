@@ -147,7 +147,9 @@ public class Bq2Psql implements SqlSyntaxConverter {
         return sql.toString();
     }
 
-    /** Translates the column list of a CREATE TABLE: BigQuery types become Postgres types and OPTIONS(...) is dropped. */
+    /**
+     * Translates the column list of a CREATE TABLE: BigQuery types become Postgres types and OPTIONS(...) is dropped.
+     */
     static String translateColumns(String columns) {
         List<String> translated = new ArrayList<>();
         for (String column : splitTopLevel(columns, ',')) {
@@ -203,8 +205,10 @@ public class Bq2Psql implements SqlSyntaxConverter {
         return i;
     }
 
-    /** Splits on {@code separator} where it is not nested in (), <> or quotes. */
-    private static List<String> splitTopLevel(String text, char separator) {
+    /**
+     * Splits on {@code separator} where it is not nested in (), <> or quotes.
+     */
+    private static List<String> splitTopLevel(String text, @SuppressWarnings("SameParameterValue") char separator) {
         List<String> parts = new ArrayList<>();
         int depth = 0;
         int start = 0;
@@ -222,7 +226,9 @@ public class Bq2Psql implements SqlSyntaxConverter {
         return parts;
     }
 
-    /** Index of {@code keyword} as a whole word outside of brackets and quotes, or -1. */
+    /**
+     * Index of {@code keyword} as a whole word outside of brackets and quotes, or -1.
+     */
     private static int indexOfTopLevelKeyword(String text, String keyword) {
         int depth = 0;
         for (int i = 0; i < text.length(); i++) {
@@ -425,17 +431,13 @@ public class Bq2Psql implements SqlSyntaxConverter {
     }
 
     private static boolean referencesInformationSchema(SqlNode from) {
-        if (from == null) return false;
-        if (from instanceof SqlIdentifier identifier) {
-            return identifier.names.stream().anyMatch("information_schema"::equalsIgnoreCase);
-        }
-        if (from instanceof SqlJoin join) {
-            return referencesInformationSchema(join.getLeft()) || referencesInformationSchema(join.getRight());
-        }
-        if (from instanceof SqlCall call) {
-            return call.getOperandList().stream().anyMatch(Bq2Psql::referencesInformationSchema);
-        }
-        return false;
+        return switch (from) {
+            case SqlIdentifier identifier -> identifier.names.stream().anyMatch("information_schema"::equalsIgnoreCase);
+            case SqlJoin join ->
+                    referencesInformationSchema(join.getLeft()) || referencesInformationSchema(join.getRight());
+            case SqlCall call -> call.getOperandList().stream().anyMatch(Bq2Psql::referencesInformationSchema);
+            case null, default -> false;
+        };
     }
 
     private static boolean isInformationSchemaIdentifierColumn(SqlNode node) {

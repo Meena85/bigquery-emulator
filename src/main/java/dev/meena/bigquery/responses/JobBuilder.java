@@ -1,7 +1,6 @@
-package dev.meena.bigquery.types;
+package dev.meena.bigquery.responses;
 
 import dev.meena.bigquery.db.Postgres;
-import dev.meena.bigquery.fn.Fn;
 import dev.meena.bigquery.jobs.Disposition;
 import dev.meena.bigquery.model.*;
 import org.jspecify.annotations.NonNull;
@@ -147,7 +146,7 @@ public class JobBuilder {
 
     private static @NonNull JobStatistics2 queryStats(Postgres.QueryResult result) {
         JobStatistics2 queryStats = new JobStatistics2();
-        queryStats.setSchema(Fn.tableSchema(result.columns()));
+        queryStats.setSchema(QueryResponses.tableSchema(result.columns()));
         return queryStats;
     }
 }

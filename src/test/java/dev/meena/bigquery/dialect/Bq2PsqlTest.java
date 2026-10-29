@@ -19,7 +19,7 @@ class Bq2PsqlTest {
         Bq2Psql bq = new Bq2Psql();
 
         String translated = bq.translate("SELECT `id`, `value` FROM `public`.`table`");
-        assertEquals("SELECT id, value\nFROM public.table", translated);
+        assertEquals("SELECT id, value\nFROM public.\"table\"", translated);
     }
 
     @Test
@@ -27,7 +27,7 @@ class Bq2PsqlTest {
         Bq2Psql bq = new Bq2Psql();
 
         String translated = bq.translate("SELECT `id`, `value` FROM `public`.`table` WHERE `id` LIKE 'test%'");
-        assertEquals("SELECT id, value\nFROM public.table\nWHERE id LIKE 'test%'", translated);
+        assertEquals("SELECT id, value\nFROM public.\"table\"\nWHERE id LIKE 'test%'", translated);
     }
 
     @Test
@@ -35,7 +35,7 @@ class Bq2PsqlTest {
         Bq2Psql bq = new Bq2Psql();
 
         String translated = bq.translate("SELECT `id`, `value` FROM `projectID`.`public`.`table` WHERE `id` = 123", "defaultProj");
-        assertEquals("SELECT id, value\nFROM \"projectid$public\".table\nWHERE id = 123", translated);
+        assertEquals("SELECT id, value\nFROM \"projectid$public\".\"table\"\nWHERE id = 123", translated);
     }
 
     @Test
@@ -51,7 +51,7 @@ class Bq2PsqlTest {
         Bq2Psql bq = new Bq2Psql();
 
         String translated = bq.translate("DROP TABLE IF EXISTS `projectID`.`public`.`table`");
-        assertEquals("DROP TABLE IF EXISTS \"projectid$public\".table", translated);
+        assertEquals("DROP TABLE IF EXISTS \"projectid$public\".\"table\"", translated);
     }
 
     @Test
@@ -59,7 +59,7 @@ class Bq2PsqlTest {
         Bq2Psql bq = new Bq2Psql();
 
         String translated = bq.translate("DROP TABLE IF EXISTS `public`.`table`", "projectID2");
-        assertEquals("DROP TABLE IF EXISTS \"projectid2$public\".table", translated);
+        assertEquals("DROP TABLE IF EXISTS \"projectid2$public\".\"table\"", translated);
     }
 
     @Test
@@ -67,7 +67,7 @@ class Bq2PsqlTest {
         Bq2Psql bq = new Bq2Psql();
 
         String translated = bq.translate("CREATE TABLE IF NOT EXISTS `projectID`.`public`.`table` AS SELECT 1");
-        assertEquals("CREATE TABLE IF NOT EXISTS \"projectid$public\".table AS SELECT 1", translated);
+        assertEquals("CREATE TABLE IF NOT EXISTS \"projectid$public\".\"table\" AS SELECT 1", translated);
     }
 
     @Test
@@ -75,7 +75,7 @@ class Bq2PsqlTest {
         Bq2Psql bq = new Bq2Psql();
 
         String translated = bq.translate("CREATE OR REPLACE TABLE `public`.`table` AS SELECT 1", "projectID2");
-        assertEquals("DROP TABLE IF EXISTS \"projectid2$public\".table; CREATE TABLE \"projectid2$public\".table AS SELECT 1", translated);
+        assertEquals("DROP TABLE IF EXISTS \"projectid2$public\".\"table\"; CREATE TABLE \"projectid2$public\".\"table\" AS SELECT 1", translated);
     }
 
     @Test

@@ -1,11 +1,12 @@
 package dev.meena.bigquery.controllers;
 
+import dev.meena.bigquery.responses.TableResponses;
+import dev.meena.bigquery.responses.Errors;
 import dev.meena.bigquery.db.Catalog;
 import dev.meena.bigquery.db.Postgres;
 import dev.meena.bigquery.dialect.Bq2Psql;
 import dev.meena.bigquery.fn.Fn;
 import dev.meena.bigquery.model.*;
-import dev.meena.bigquery.types.BQType;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -56,13 +57,13 @@ public class TableDataController {
             long total = postgres.count("SELECT COUNT(*) FROM " + table);
             Postgres.QueryResult result = postgres.query("SELECT * FROM " + table + " OFFSET " + offset + " LIMIT " + limit);
 
-            TableDataList response = BQType.tableDataList(result).totalRows(String.valueOf(total));
+            TableDataList response = TableResponses.tableDataList(result).totalRows(String.valueOf(total));
             if (offset + result.rows().size() < total)
                 response.setPageToken(String.valueOf(offset + result.rows().size()));
 
             return Response.ok(response).build();
         } catch (RuntimeException e) {
-            return Fn.toError(e);
+            return Errors.toError(e);
         }
     }
 
@@ -74,7 +75,7 @@ public class TableDataController {
                               @PathParam("tableId") String tableId,
                               TableDataInsertAllRequest request) {
         if (request == null || request.getRows() == null)
-            return Fn.bigQueryError(Response.Status.BAD_REQUEST, "'rows' parameter is required");
+            return Errors.bigQueryError(Response.Status.BAD_REQUEST, "'rows' parameter is required");
 
         Catalog.TableInfo info = catalog.findTable(Fn.toSchema(projectId, datasetId), tableId);
         if (info == null)
@@ -94,7 +95,7 @@ public class TableDataController {
     }
 
     private static Response notFound(String projectId, String datasetId, String tableId) {
-        return Fn.bigQueryError(Response.Status.NOT_FOUND,
+        return Errors.bigQueryError(Response.Status.NOT_FOUND,
                 "Not found: Table " + projectId + ":" + datasetId + "." + tableId);
     }
 }

@@ -1,4 +1,4 @@
-package dev.meena.bigquery.types;
+package dev.meena.bigquery.jobs;
 
 import io.quarkus.runtime.annotations.RegisterForReflection;
 

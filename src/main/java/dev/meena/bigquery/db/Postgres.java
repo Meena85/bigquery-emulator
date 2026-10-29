@@ -5,11 +5,8 @@ import io.agroal.api.AgroalDataSource;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.postgresql.util.PGobject;
 
-import java.math.BigDecimal;
 import java.sql.*;
-import java.sql.Date;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;

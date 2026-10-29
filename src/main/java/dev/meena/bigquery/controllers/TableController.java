@@ -1,15 +1,17 @@
 package dev.meena.bigquery.controllers;
 
+import dev.meena.bigquery.responses.TableResponses;
+import dev.meena.bigquery.responses.Errors;
 import dev.meena.bigquery.db.Catalog;
 import dev.meena.bigquery.db.Postgres;
 import dev.meena.bigquery.dialect.BqTypes;
 import dev.meena.bigquery.fn.Fn;
 import dev.meena.bigquery.model.*;
-import dev.meena.bigquery.types.BQType;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import org.apache.commons.lang3.StringUtils;
 
 import java.util.List;
 import java.util.Set;
@@ -44,29 +46,20 @@ public class TableController {
 
         try {
             if (!catalog.schemaExists(schema))
-                return Fn.bigQueryError(Response.Status.NOT_FOUND, "Not found: Dataset " + projectId + ":" + datasetId);
+                return Errors.bigQueryError(Response.Status.NOT_FOUND, "Not found: Dataset " + projectId + ":" + datasetId);
 
             Catalog.TablePage page = catalog.listTables(schema, offset, limit);
             List<TableListTablesInner> tables = page.tables().stream()
-                    .map(t -> new TableListTablesInner()
-                            .kind("bigquery#table")
-                            .id(projectId + ":" + datasetId + "." + t.name())
-                            .friendlyName(t.name())
-                            .tableReference(BQType.tableReference(projectId, datasetId, t.name()))
-                            .type(t.view() ? "VIEW" : "TABLE"))
+                    .map(t -> TableResponses.tableListItem(projectId, datasetId, t))
                     .toList();
 
-            TableList response = new TableList()
-                    .kind("bigquery#tableList")
-                    .etag("\"" + projectId + ":" + datasetId + ":tables\"")
-                    .tables(tables)
-                    .totalItems((int) page.total());
+            TableList response = TableResponses.tableList(projectId, datasetId, tables, page.total());
             if (offset + tables.size() < page.total())
                 response.setNextPageToken(String.valueOf(offset + tables.size()));
 
             return Response.ok(response).build();
         } catch (RuntimeException e) {
-            return Fn.toError(e);
+            return Errors.toError(e);
         }
     }
 
@@ -80,12 +73,12 @@ public class TableController {
             String schema = Fn.toSchema(projectId, datasetId);
             Catalog.TableInfo info = catalog.findTable(schema, tableId);
             if (info == null)
-                return Fn.bigQueryError(Response.Status.NOT_FOUND,
+                return Errors.bigQueryError(Response.Status.NOT_FOUND,
                         "Not found: Table " + projectId + ":" + datasetId + "." + tableId);
 
             return Response.ok(describe(projectId, datasetId, tableId, info, selectedFields)).build();
         } catch (RuntimeException e) {
-            return Fn.toError(e);
+            return Errors.toError(e);
         }
     }
 
@@ -98,22 +91,22 @@ public class TableController {
                 ? null
                 : request.getTableReference().getTableId();
         if (isBlank(tableId))
-            return Fn.bigQueryError(Response.Status.BAD_REQUEST, "'tableReference.tableId' parameter is required");
+            return Errors.bigQueryError(Response.Status.BAD_REQUEST, "'tableReference.tableId' parameter is required");
 
         List<TableFieldSchema> fields = request.getSchema() == null ? List.of() : request.getSchema().getFields();
         if (fields == null || fields.isEmpty())
-            return Fn.bigQueryError(Response.Status.BAD_REQUEST, "'schema.fields' parameter is required");
+            return Errors.bigQueryError(Response.Status.BAD_REQUEST, "'schema.fields' parameter is required");
 
         try {
             String schema = Fn.toSchema(projectId, datasetId);
             if (!catalog.schemaExists(schema))
-                return Fn.bigQueryError(Response.Status.NOT_FOUND, "Not found: Dataset " + projectId + ":" + datasetId);
+                return Errors.bigQueryError(Response.Status.NOT_FOUND, "Not found: Dataset " + projectId + ":" + datasetId);
             if (catalog.findTable(schema, tableId) != null)
-                return Fn.bigQueryError(Response.Status.CONFLICT,
+                return Errors.bigQueryError(Response.Status.CONFLICT,
                         "Already Exists: Table " + projectId + ":" + datasetId + "." + tableId);
 
             String columns = fields.stream()
-                    .map(f -> Fn.pgQuote(f.getName().toLowerCase()) + " " + toPgType(f)
+                    .map(f -> Fn.pgQuote(StringUtils.lowerCase(f.getName())) + " " + toPgType(f)
                             + ("REQUIRED".equalsIgnoreCase(f.getMode()) ? " NOT NULL" : ""))
                     .collect(Collectors.joining(", "));
             postgres.execute("CREATE TABLE " + Fn.pgQuote(schema) + "." + Fn.pgQuote(tableId) + " (" + columns + ")");
@@ -121,7 +114,7 @@ public class TableController {
             Catalog.TableInfo info = catalog.findTable(schema, tableId);
             return Response.ok(describe(projectId, datasetId, tableId, info, null)).build();
         } catch (RuntimeException e) {
-            return Fn.toError(e);
+            return Errors.toError(e);
         }
     }
 
@@ -134,13 +127,13 @@ public class TableController {
             String schema = Fn.toSchema(projectId, datasetId);
             Catalog.TableInfo info = catalog.findTable(schema, tableId);
             if (info == null)
-                return Fn.bigQueryError(Response.Status.NOT_FOUND,
+                return Errors.bigQueryError(Response.Status.NOT_FOUND,
                         "Not found: Table " + projectId + ":" + datasetId + "." + tableId);
 
             postgres.execute("DROP " + (info.view() ? "VIEW " : "TABLE ") + Fn.pgQuote(schema) + "." + Fn.pgQuote(info.name()));
             return Response.noContent().build();
         } catch (RuntimeException e) {
-            return Fn.toError(e);
+            return Errors.toError(e);
         }
     }
 
@@ -150,31 +143,8 @@ public class TableController {
                 ? null
                 : java.util.Arrays.stream(selectedFields.split(",")).map(s -> s.trim().toLowerCase()).collect(Collectors.toSet());
 
-        List<TableFieldSchema> fields = catalog.columns(schema, info.name()).stream()
-                .filter(c -> selected == null || selected.contains(c.name().toLowerCase()))
-                .map(c -> {
-                    BqTypes.BqType type = BqTypes.fromPg(c.pgType());
-                    return new TableFieldSchema()
-                            .name(c.name())
-                            .type(type.type())
-                            .mode(type.repeated() ? "REPEATED" : c.nullable() ? "NULLABLE" : "REQUIRED");
-                })
-                .toList();
-
         long numRows = postgres.count("SELECT COUNT(*) FROM " + Fn.pgQuote(schema) + "." + Fn.pgQuote(info.name()));
-        String now = String.valueOf(System.currentTimeMillis());
-
-        // Storage statistics are not tracked; only the row count is real.
-        Table table = new Table(now, BQType.etag(projectId, datasetId, tableId),
-                projectId + ":" + datasetId + "." + tableId, now, "US",
-                "0", "0", "0", null, null, null, null, "0", String.valueOf(numRows), null, null, null, null,
-                "/bigquery/v2/projects/" + projectId + "/datasets/" + datasetId + "/tables/" + tableId,
-                info.view() ? "VIEW" : "TABLE");
-        table.setKind("bigquery#table");
-        table.setFriendlyName(tableId);
-        table.setTableReference(BQType.tableReference(projectId, datasetId, tableId));
-        table.setSchema(new TableSchema().fields(fields));
-        return table;
+        return TableResponses.table(projectId, datasetId, tableId, info, catalog.columns(schema, info.name()), selected, numRows);
     }
 
     private static String toPgType(TableFieldSchema field) {

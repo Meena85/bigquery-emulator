@@ -1,6 +1,6 @@
 package dev.meena.bigquery.controllers;
 
-import dev.meena.bigquery.types.UnimplementedResponse;
+import dev.meena.bigquery.responses.UnimplementedResponse;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;

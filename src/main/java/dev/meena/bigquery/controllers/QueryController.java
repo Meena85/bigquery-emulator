@@ -1,8 +1,9 @@
 package dev.meena.bigquery.controllers;
 
+import dev.meena.bigquery.responses.QueryResponses;
+import dev.meena.bigquery.responses.Errors;
 import dev.meena.bigquery.db.Postgres;
 import dev.meena.bigquery.dialect.Bq2Psql;
-import dev.meena.bigquery.fn.Fn;
 import dev.meena.bigquery.jobs.PgJobStorage;
 import dev.meena.bigquery.model.QueryRequest;
 import jakarta.inject.Inject;
@@ -36,14 +37,14 @@ public class QueryController {
     @Consumes(MediaType.APPLICATION_JSON)
     public Response query(@PathParam("projectId") String projectId, QueryRequest request) {
         if (request == null || isBlank(request.getQuery()))
-            return Fn.bigQueryError(Response.Status.BAD_REQUEST, "'query' parameter is required");
+            return Errors.bigQueryError(Response.Status.BAD_REQUEST, "'query' parameter is required");
 
         try {
             Postgres.QueryResult result = postgres.query(bq.translate(request.getQuery(), projectId));
             String jobId = "job_" + UUID.randomUUID().toString().replace("-", "");
-            return Response.ok(Fn.queryResponse(projectId, jobId, DEFAULT_LOCATION, result)).build();
+            return Response.ok(QueryResponses.queryResponse(projectId, jobId, DEFAULT_LOCATION, result)).build();
         } catch (Exception e) {
-            return Fn.toError(e);
+            return Errors.toError(e);
         }
     }
 
@@ -52,7 +53,7 @@ public class QueryController {
     public Response getQueryResults(@PathParam("projectId") String projectId, @PathParam("jobId") String jobId) {
         var result = jobStorage.jobResults(projectId, jobId);
         if (result == null)
-            return Fn.bigQueryError(Response.Status.NOT_FOUND, "Not found: Job " + projectId + ":" + jobId);
+            return Errors.bigQueryError(Response.Status.NOT_FOUND, "Not found: Job " + projectId + ":" + jobId);
 
         return Response.ok(result).build();
     }

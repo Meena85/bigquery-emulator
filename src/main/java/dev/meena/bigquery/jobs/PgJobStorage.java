@@ -1,5 +1,6 @@
 package dev.meena.bigquery.jobs;
 
+import dev.meena.bigquery.responses.QueryResponses;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.meena.bigquery.db.Postgres;
@@ -152,7 +153,7 @@ public class PgJobStorage {
                 result = new Postgres.QueryResult(List.of(), List.of());
         }
 
-        return Fn.queryResultsResponse(
+        return QueryResponses.queryResultsResponse(
                 details.projectId(),
                 details.jobId(),
                 details.location(),
@@ -187,8 +188,8 @@ public class PgJobStorage {
                     .execute();
 
             String sql = """
-                DELETE FROM "%s".%s WHERE project_id = ? AND job_id = ?
-                """.formatted(JOBS_SCHEMA, JOBS_DETAILS_TABLE);
+                    DELETE FROM "%s".%s WHERE project_id = ? AND job_id = ?
+                    """.formatted(JOBS_SCHEMA, JOBS_DETAILS_TABLE);
             PreparedStatement stmt = con.prepareStatement(sql);
             stmt.setString(1, projectId);
             stmt.setString(2, jobID);

@@ -31,7 +31,9 @@ public class Catalog {
     @SuppressWarnings("CdiInjectionPointsInspection")
     AgroalDataSource dataSource;
 
-    /** Schemas whose name starts with {@code prefix} (e.g. {@code "proj$"}), sorted by name. */
+    /**
+     * Schemas whose name starts with {@code prefix} (e.g. {@code "proj$"}), sorted by name.
+     */
     public List<String> schemasWithPrefix(String prefix) {
         return queryStrings("""
                 SELECT schema_name FROM information_schema.schemata
@@ -81,7 +83,9 @@ public class Catalog {
         return new TablePage(tables, total);
     }
 
-    /** Finds a table or view by case-insensitive name, as BigQuery clients may differ in casing. */
+    /**
+     * Finds a table or view by case-insensitive name, as BigQuery clients may differ in casing.
+     */
     public TableInfo findTable(String schema, String table) {
         try (Connection con = dataSource.getConnection();
              PreparedStatement stmt = con.prepareStatement("""

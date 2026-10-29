@@ -39,33 +39,32 @@ import java.util.Base64;
 public final class ByteString {
 
     private static final char[] HEX_DIGITS =
-            { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
-    /** A singleton empty {@code ByteString}. */
-    public static final ByteString EMPTY = ByteString.of();
+            {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+
     final byte[] data;
     private transient int hashCode; // Lazily computed; 0 if unknown.
     private transient String utf8; // Lazily computed.
+
     ByteString(byte[] data) {
         this.data = data; // Trusted internal constructor doesn't clone data.
     }
+
     /**
      * Returns a new byte string containing a clone of the bytes of {@code data}.
      */
     public static ByteString of(byte... data) {
         return new ByteString(data.clone());
     }
-    /** Returns a new byte string containing the {@code UTF-8} bytes of {@code s}. */
-    public static ByteString encodeUtf8(String s) {
-        ByteString byteString = new ByteString(s.getBytes(StandardCharsets.UTF_8));
-        byteString.utf8 = s;
-        return byteString;
-    }
-    /** Constructs a new {@code String} by decoding the bytes as {@code UTF-8}. */
+
+    /**
+     * Constructs a new {@code String} by decoding the bytes as {@code UTF-8}.
+     */
     public String utf8() {
         String result = utf8;
         // We don't care if we double-allocate in racy code.
         return result != null ? result : (utf8 = new String(data, StandardCharsets.UTF_8));
     }
+
     /**
      * Returns this byte string encoded as <a
      * href="http://www.ietf.org/rfc/rfc2045.txt">Base64</a>. In violation of the
@@ -74,6 +73,7 @@ public final class ByteString {
     public String base64() {
         return Base64.getEncoder().encodeToString(data);
     }
+
     /**
      * Decodes the Base64-encoded bytes and returns their value as a byte string.
      * Returns null if {@code base64} is not a Base64-encoded sequence of bytes.
@@ -82,7 +82,10 @@ public final class ByteString {
         byte[] decoded = Base64.getDecoder().decode(base64);
         return decoded != null ? new ByteString(decoded) : null;
     }
-    /** Returns this byte string encoded in hexadecimal. */
+
+    /**
+     * Returns this byte string encoded in hexadecimal.
+     */
     public String hex() {
         char[] result = new char[data.length * 2];
         int c = 0;
@@ -92,44 +95,12 @@ public final class ByteString {
         }
         return new String(result);
     }
-    /** Decodes the hex-encoded bytes and returns their value a byte string. */
-    public static ByteString decodeHex(String hex) {
-        if (hex.length() % 2 != 0) throw new IllegalArgumentException("Unexpected hex string: " + hex);
-        byte[] result = new byte[hex.length() / 2];
-        for (int i = 0; i < result.length; i++) {
-            int d1 = decodeHexDigit(hex.charAt(i * 2)) << 4;
-            int d2 = decodeHexDigit(hex.charAt(i * 2 + 1));
-            result[i] = (byte) (d1 + d2);
-        }
-        return of(result);
-    }
-    private static int decodeHexDigit(char c) {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        throw new IllegalArgumentException("Unexpected hex digit: " + c);
-    }
-    /**
-     * Returns true when {@code ascii} is not null and equals the bytes wrapped
-     * by this byte string.
-     */
-    public boolean equalsAscii(String ascii) {
-        if (ascii == null || data.length != ascii.length()) {
-            return false;
-        }
-        if (ascii.equals(this.utf8)) { // not using String.equals to avoid looping twice.
-            return true;
-        }
-        for (int i = 0; i < data.length; i++) {
-            if (data[i] != ascii.charAt(i)) return false;
-        }
-        return true;
-    }
+
     /**
      * Reads {@code count} bytes from {@code in} and returns the result.
      *
      * @throws java.io.EOFException if {@code in} has fewer than {@code count}
-     *     bytes to read.
+     *                              bytes to read.
      */
     public static ByteString read(InputStream in, int byteCount) throws IOException {
         byte[] result = new byte[byteCount];
@@ -139,66 +110,41 @@ public final class ByteString {
         }
         return new ByteString(result);
     }
-    /**
-     * Returns a byte string equal to this byte string, but with the bytes 'A'
-     * through 'Z' replaced with the corresponding byte in 'a' through 'z'.
-     * Returns this byte string if it contains no bytes in 'A' through 'Z'.
-     */
-    public ByteString toAsciiLowercase() {
-        // Search for an uppercase character. If we don't find one, return this.
-        for (int i = 0; i < data.length; i++) {
-            byte c = data[i];
-            if (c < 'A' || c > 'Z') continue;
-            // If we reach this point, this string is not not lowercase. Create and
-            // return a new byte string.
-            byte[] lowercase = data.clone();
-            lowercase[i++] = (byte) (c - ('A' - 'a'));
-            for (; i < lowercase.length; i++) {
-                c = lowercase[i];
-                if (c < 'A' || c > 'Z') continue;
-                lowercase[i] = (byte) (c - ('A' - 'a'));
-            }
-            return new ByteString(lowercase);
-        }
-        return this;
-    }
-    public static ByteString concat(ByteString... byteStrings) {
-        int size = 0;
-        for (ByteString byteString : byteStrings) {
-            size += byteString.size();
-        }
-        byte[] result = new byte[size];
-        int pos = 0;
-        for (ByteString byteString : byteStrings) {
-            System.arraycopy(byteString.data, 0, result, pos, byteString.size());
-            pos += byteString.size();
-        }
-        return new ByteString(result);
-    }
+
     /**
      * Returns the number of bytes in this ByteString.
      */
     public int size() {
         return data.length;
     }
+
     /**
      * Returns a byte array containing a copy of the bytes in this {@code ByteString}.
      */
     public byte[] toByteArray() {
         return data.clone();
     }
-    /** Writes the contents of this byte string to {@code out}. */
+
+    /**
+     * Writes the contents of this byte string to {@code out}.
+     */
     public void write(OutputStream out) throws IOException {
         out.write(data);
     }
-    @Override public boolean equals(Object o) {
+
+    @Override
+    public boolean equals(Object o) {
         return o == this || o instanceof ByteString && Arrays.equals(((ByteString) o).data, data);
     }
-    @Override public int hashCode() {
+
+    @Override
+    public int hashCode() {
         int result = hashCode;
         return result != 0 ? result : (hashCode = Arrays.hashCode(data));
     }
-    @Override public String toString() {
+
+    @Override
+    public String toString() {
         if (data.length == 0) {
             return "ByteString[size=0]";
         }

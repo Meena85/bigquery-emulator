@@ -67,15 +67,18 @@ src/main/java/dev/meena/bigquery/
 │   ├── Bq2Psql.java                 # Calcite-based AST parser, table identifier rewriter, DDL & insertAll translator
 │   └── BqToPgDialect.java           # Custom Calcite PostgresqlSqlDialect (JSON_EXTRACT, JSON_VALUE, quoting)
 ├── fn/
-│   ├── Fn.java                      # Schema naming, JDBC-to-BigQuery type mapping, error envelope (`bigQueryError`/`toError`), result formatting
-│   ├── ByteString.java              # Base64 / hex byte wrapper
-│   └── ZipFn.java                   # GZIP detection & decompression helpers
+│   ├── Fn.java                      # Schema naming (`toSchema`), identifier quoting, SQL text helpers
+│   └── ByteString.java              # Base64 / hex byte wrapper
 ├── jobs/
 │   ├── Disposition.java             # BigQuery createDisposition & writeDisposition enums
+│   ├── ErrorMessage.java            # Error payload stored with a failed job
 │   └── PgJobStorage.java            # Job persistence in "bq$jobs".details & query result table materialization
-└── types/
-    ├── BQType.java                  # Builders for TableReference, TableDataList, etags
-    ├── ErrorMessage.java            # Internal error record
+└── responses/                       # Builders for REST API response payloads
+    ├── Errors.java                  # BigQuery error envelope (`bigQueryError`, `toError`)
+    ├── QueryResponses.java          # Query/job results: schema, rows, job reference
+    ├── CellValues.java              # Postgres value -> REST cell value encoding
+    ├── TableResponses.java          # Table, table list and table data payloads
+    ├── DatasetResponses.java        # Dataset and dataset list payloads
     ├── JobBuilder.java              # Fluent builder for BigQuery Job responses
     └── UnimplementedResponse.java   # Diagnostic response for unimplemented REST paths
 ```
@@ -128,7 +131,7 @@ When adding or fixing SQL translation features:
    - Add integration tests in `TestJobsController` (queries & jobs), `TestDatasetController` or `TestTableController` using the official `com.google.cloud.bigquery.BigQuery` client against the Testcontainers PostgreSQL instance.
    - Test database seed data lives in `src/test/resources/migration/init.sql` (default test project: `test`, dataset: `public` $\rightarrow$ Postgres schema `"test$public"`).
 2. **Error Handling:**
-   - Return errors matching BigQuery's standard error envelope (`{"error": {code, message, status, errors[]}}`) using `Fn.toError(Exception)` / `Fn.bigQueryError(status, message)` so the Google Cloud BigQuery SDK parses status codes and messages accurately.
+   - Return errors matching BigQuery's standard error envelope (`{"error": {code, message, status, errors[]}}`) using `Errors.toError(Exception)` / `Errors.bigQueryError(status, message)` so the Google Cloud BigQuery SDK parses status codes and messages accurately.
 3. **Parameterization & Quoting:**
    - Always quote dynamic schema, table, and column identifiers safely when constructing SQL strings (`Fn.quoteIdentifier` / `Bq2Psql.quoteIdentifier`).
    - Use parameterized `PreparedStatement` batches for data insertion (see `Bq2Psql.insertAll` and `Postgres.executeInsertAll`).
