@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 import java.util.zip.GZIPOutputStream;
 
@@ -432,5 +433,58 @@ public class TestJobsController {
             gzipStream.write(body.getBytes(StandardCharsets.UTF_8));
         }
         return byteStream.toByteArray();
+    }
+
+    /*
+     * Verifies GET /jobs lists created jobs (newest first, paged) and POST /jobs/{id}/cancel returns the job.
+     */
+    @Test
+    void listJobsAndCancelJob() {
+        String first = uniqueId("list-a");
+        String second = uniqueId("list-b");
+        for (String id : List.of(first, second)) {
+            given().contentType(ContentType.JSON)
+                    .body("{\"jobReference\":{\"jobId\":\"" + id + "\"},\"configuration\":{\"query\":{\"query\":\"SELECT 1 AS n\",\"useLegacySql\":false}}}")
+                    .when().post("/bigquery/v2/projects/{projectId}/jobs", projectId).then().statusCode(200);
+        }
+
+        given().queryParam("maxResults", 2)
+                .when().get("/bigquery/v2/projects/{projectId}/jobs", projectId)
+                .then().statusCode(200)
+                .body("kind", Matchers.equalTo("bigquery#jobList"))
+                .body("jobs.size()", Matchers.equalTo(2))
+                .body("jobs[0].jobReference.jobId", Matchers.equalTo(second))
+                .body("jobs[1].jobReference.jobId", Matchers.equalTo(first))
+                .body("jobs[0].state", Matchers.equalTo("DONE"))
+                .body("nextPageToken", Matchers.equalTo("2"));
+
+        given().queryParam("stateFilter", "running")
+                .when().get("/bigquery/v2/projects/{projectId}/jobs", projectId)
+                .then().statusCode(200).body("jobs", Matchers.nullValue());
+
+        given().when().post("/bigquery/v2/projects/{projectId}/jobs/{jobId}/cancel", projectId, first)
+                .then().statusCode(200)
+                .body("kind", Matchers.equalTo("bigquery#jobCancelResponse"))
+                .body("job.jobReference.jobId", Matchers.equalTo(first))
+                .body("job.status.state", Matchers.equalTo("DONE"));
+
+        given().when().post("/bigquery/v2/projects/{projectId}/jobs/{jobId}/cancel", projectId, uniqueId("nope"))
+                .then().statusCode(404);
+    }
+
+    /*
+     * Verifies a failed job is stored with errorResult so it shows up as failed in job listings.
+     */
+    @Test
+    void failedJobIsListedWithErrorResult() {
+        String id = uniqueId("failed");
+        given().contentType(ContentType.JSON)
+                .body("{\"jobReference\":{\"jobId\":\"" + id + "\"},\"configuration\":{\"query\":{\"query\":\"SELEC broken\"}}}")
+                .when().post("/bigquery/v2/projects/{projectId}/jobs", projectId).then().statusCode(400);
+
+        given().when().get("/bigquery/v2/projects/{projectId}/jobs/{jobId}", projectId, id)
+                .then().statusCode(200)
+                .body("status.state", Matchers.equalTo("DONE"))
+                .body("status.errorResult.message", Matchers.notNullValue());
     }
 }

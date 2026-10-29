@@ -2,6 +2,8 @@ package dev.meena.bigquery.controllers;
 
 import dev.meena.bigquery.responses.Errors;
 import dev.meena.bigquery.db.Catalog;
+import dev.meena.bigquery.db.Metadata;
+import dev.meena.bigquery.db.MetadataStore;
 import dev.meena.bigquery.db.Postgres;
 import dev.meena.bigquery.fn.Fn;
 import dev.meena.bigquery.model.Dataset;
@@ -31,6 +33,9 @@ public class DatasetController {
     @Inject
     Catalog catalog;
 
+    @Inject
+    MetadataStore metadataStore;
+
     @GET
     public Response listDatasets(@PathParam("projectId") String projectId) {
         String prefix = Fn.toSchema(projectId, "");
@@ -47,7 +52,7 @@ public class DatasetController {
         if (!catalog.schemaExists(Fn.toSchema(projectId, datasetId)))
             return notFound(projectId, datasetId);
 
-        return Response.ok(DatasetResponses.dataset(projectId, datasetId, null)).build();
+        return Response.ok(DatasetResponses.dataset(projectId, datasetId, metadataStore.dataset(Fn.toSchema(projectId, datasetId)))).build();
     }
 
     @POST
@@ -66,7 +71,47 @@ public class DatasetController {
 
         try {
             postgres.execute("CREATE SCHEMA " + Fn.pgQuote(schema));
-            return Response.ok(DatasetResponses.dataset(projectId, datasetId, request)).build();
+            Metadata metadata = Metadata.replace(request.getDescription(), request.getFriendlyName(), request.getLabels());
+            metadataStore.saveDataset(schema, metadata);
+            return Response.ok(DatasetResponses.dataset(projectId, datasetId, metadata)).build();
+        } catch (RuntimeException e) {
+            return Errors.toError(e);
+        }
+    }
+
+    /** Updates only the fields present in the request. */
+    @PATCH
+    @Path("/{datasetId}")
+    @Consumes(MediaType.APPLICATION_JSON)
+    public Response patchDataset(@PathParam("projectId") String projectId,
+                                 @PathParam("datasetId") String datasetId,
+                                 Dataset request) {
+        return applyUpdate(projectId, datasetId, request, false);
+    }
+
+    /** Replaces the dataset's mutable fields with the request's. */
+    @PUT
+    @Path("/{datasetId}")
+    @Consumes(MediaType.APPLICATION_JSON)
+    public Response updateDataset(@PathParam("projectId") String projectId,
+                                  @PathParam("datasetId") String datasetId,
+                                  Dataset request) {
+        return applyUpdate(projectId, datasetId, request, true);
+    }
+
+    private Response applyUpdate(String projectId, String datasetId, Dataset request, boolean replace) {
+        String schema = Fn.toSchema(projectId, datasetId);
+        if (!catalog.schemaExists(schema))
+            return notFound(projectId, datasetId);
+        if (request == null)
+            return Errors.bigQueryError(Response.Status.BAD_REQUEST, "A dataset is required");
+
+        try {
+            Metadata metadata = replace
+                    ? Metadata.replace(request.getDescription(), request.getFriendlyName(), request.getLabels())
+                    : metadataStore.dataset(schema).patch(request.getDescription(), request.getFriendlyName(), request.getLabels());
+            metadataStore.saveDataset(schema, metadata);
+            return Response.ok(DatasetResponses.dataset(projectId, datasetId, metadata)).build();
         } catch (RuntimeException e) {
             return Errors.toError(e);
         }

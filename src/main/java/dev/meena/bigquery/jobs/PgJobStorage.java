@@ -18,6 +18,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -130,6 +131,41 @@ public class PgJobStorage {
             }
         } catch (Exception e) {
             throw new IllegalStateException("Unable to load job " + projectId + ":" + jobId + ": " + e.getMessage(), e);
+        }
+    }
+
+    public record JobPage(List<Job> jobs, boolean hasMore) {
+    }
+
+    /** Jobs of a project, newest first. Every job runs to completion when it is created, so none is ever pending or running. */
+    public JobPage list(String projectId, long offset, int limit, String stateFilter) {
+        ensureJobsTableExists();
+        if (stateFilter != null && !stateFilter.equalsIgnoreCase("done"))
+            return new JobPage(List.of(), false);
+
+        String sql = """
+                SELECT job_definition
+                FROM %s.%s
+                WHERE project_id = ?
+                ORDER BY created_at DESC, job_id
+                OFFSET ? LIMIT ?
+                """.formatted(JOBS_SCHEMA, JOBS_DETAILS_TABLE);
+
+        try (var con = dataSource.getConnection();
+             var stmt = con.prepareStatement(sql)) {
+            stmt.setString(1, projectId);
+            stmt.setLong(2, offset);
+            stmt.setInt(3, limit + 1);
+
+            List<Job> jobs = new ArrayList<>();
+            try (var rs = stmt.executeQuery()) {
+                while (rs.next())
+                    jobs.add(OBJECT_MAPPER.readValue(rs.getString("job_definition"), Job.class));
+            }
+            boolean hasMore = jobs.size() > limit;
+            return new JobPage(hasMore ? jobs.subList(0, limit) : jobs, hasMore);
+        } catch (Exception e) {
+            throw new IllegalStateException("Unable to list jobs of " + projectId + ": " + e.getMessage(), e);
         }
     }
 

@@ -141,7 +141,7 @@ public class JobBuilder {
         List<ErrorProto> errors = new ArrayList<>();
         errors.add(err);
 
-        return new JobStatus(errors, "DONE");
+        return new JobStatus(errors, "DONE").errorResult(err);
     }
 
     private static @NonNull JobStatistics2 queryStats(Postgres.QueryResult result) {

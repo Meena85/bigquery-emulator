@@ -3,6 +3,8 @@ package dev.meena.bigquery.controllers;
 import dev.meena.bigquery.responses.TableResponses;
 import dev.meena.bigquery.responses.Errors;
 import dev.meena.bigquery.db.Catalog;
+import dev.meena.bigquery.db.Metadata;
+import dev.meena.bigquery.db.MetadataStore;
 import dev.meena.bigquery.db.Postgres;
 import dev.meena.bigquery.dialect.BqTypes;
 import dev.meena.bigquery.fn.Fn;
@@ -34,6 +36,9 @@ public class TableController {
 
     @Inject
     Catalog catalog;
+
+    @Inject
+    MetadataStore metadataStore;
 
     @GET
     public Response listTables(@PathParam("projectId") String projectId,
@@ -112,6 +117,66 @@ public class TableController {
             postgres.execute("CREATE TABLE " + Fn.pgQuote(schema) + "." + Fn.pgQuote(tableId) + " (" + columns + ")");
 
             Catalog.TableInfo info = catalog.findTable(schema, tableId);
+            metadataStore.saveTable(schema, info.name(),
+                    Metadata.replace(request.getDescription(), request.getFriendlyName(), request.getLabels()));
+            return Response.ok(describe(projectId, datasetId, tableId, info, null)).build();
+        } catch (RuntimeException e) {
+            return Errors.toError(e);
+        }
+    }
+
+    /**
+     * Updates only the fields present in the request; fields of the request's schema that are new are added as columns.
+     */
+    @PATCH
+    @Path("/{tableId}")
+    @Consumes(MediaType.APPLICATION_JSON)
+    public Response patchTable(@PathParam("projectId") String projectId,
+                               @PathParam("datasetId") String datasetId,
+                               @PathParam("tableId") String tableId,
+                               Table request) {
+        return applyUpdate(projectId, datasetId, tableId, request, false);
+    }
+
+    /**
+     * Replaces the table's mutable metadata with the request's; fields of the request's schema that are new are added as columns.
+     */
+    @PUT
+    @Path("/{tableId}")
+    @Consumes(MediaType.APPLICATION_JSON)
+    public Response updateTable(@PathParam("projectId") String projectId,
+                                @PathParam("datasetId") String datasetId,
+                                @PathParam("tableId") String tableId,
+                                Table request) {
+        return applyUpdate(projectId, datasetId, tableId, request, true);
+    }
+
+    private Response applyUpdate(String projectId, String datasetId, String tableId, Table request, boolean replace) {
+        if (request == null)
+            return Errors.bigQueryError(Response.Status.BAD_REQUEST, "A table is required");
+
+        try {
+            String schema = Fn.toSchema(projectId, datasetId);
+            Catalog.TableInfo info = catalog.findTable(schema, tableId);
+            if (info == null)
+                return Errors.bigQueryError(Response.Status.NOT_FOUND,
+                        "Not found: Table " + projectId + ":" + datasetId + "." + tableId);
+
+            if (request.getSchema() != null && request.getSchema().getFields() != null) {
+                Set<String> existing = catalog.columns(schema, info.name()).stream()
+                        .map(c -> c.name().toLowerCase()).collect(Collectors.toSet());
+                for (TableFieldSchema field : request.getSchema().getFields()) {
+                    if (existing.contains(StringUtils.lowerCase(field.getName()))) continue;
+                    // BigQuery only allows adding NULLABLE/REPEATED columns to an existing table
+                    postgres.execute("ALTER TABLE " + Fn.pgQuote(schema) + "." + Fn.pgQuote(info.name())
+                            + " ADD COLUMN " + Fn.pgQuote(field.getName().toLowerCase()) + " " + toPgType(field));
+                }
+            }
+
+            Metadata metadata = replace
+                    ? Metadata.replace(request.getDescription(), request.getFriendlyName(), request.getLabels())
+                    : metadataStore.table(schema, info.name()).patch(request.getDescription(), request.getFriendlyName(), request.getLabels());
+            metadataStore.saveTable(schema, info.name(), metadata);
             return Response.ok(describe(projectId, datasetId, tableId, info, null)).build();
         } catch (RuntimeException e) {
             return Errors.toError(e);
@@ -144,7 +209,8 @@ public class TableController {
                 : java.util.Arrays.stream(selectedFields.split(",")).map(s -> s.trim().toLowerCase()).collect(Collectors.toSet());
 
         long numRows = postgres.count("SELECT COUNT(*) FROM " + Fn.pgQuote(schema) + "." + Fn.pgQuote(info.name()));
-        return TableResponses.table(projectId, datasetId, tableId, info, catalog.columns(schema, info.name()), selected, numRows);
+        return TableResponses.table(projectId, datasetId, tableId, info, catalog.columns(schema, info.name()), selected, numRows,
+                metadataStore.table(schema, info.name()));
     }
 
     private static String toPgType(TableFieldSchema field) {

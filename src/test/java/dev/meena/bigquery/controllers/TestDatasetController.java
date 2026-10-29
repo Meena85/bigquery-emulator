@@ -72,4 +72,49 @@ public class TestDatasetController {
                 .when().post("/bigquery/v2/projects/{p}/datasets", projectId)
                 .then().statusCode(400);
     }
+
+    @Test
+    void insertPersistsMetadataAndPatchMergesIt() {
+        String id = "meta_" + System.nanoTime();
+        given().contentType(ContentType.JSON)
+                .body("{\"datasetReference\":{\"datasetId\":\"" + id + "\"},\"description\":\"first\",\"friendlyName\":\"Friendly\",\"labels\":{\"a\":\"1\",\"b\":\"2\"}}")
+                .when().post("/bigquery/v2/projects/{p}/datasets", projectId).then().statusCode(200);
+
+        given().when().get("/bigquery/v2/projects/{p}/datasets/{d}", projectId, id)
+                .then().statusCode(200)
+                .body("description", equalTo("first"))
+                .body("friendlyName", equalTo("Friendly"))
+                .body("labels.a", equalTo("1"));
+
+        // PATCH changes the description, adds label c, removes label a and keeps the rest
+        given().contentType(ContentType.JSON).body("{\"description\":\"second\",\"labels\":{\"c\":\"3\",\"a\":null}}")
+                .when().patch("/bigquery/v2/projects/{p}/datasets/{d}", projectId, id)
+                .then().statusCode(200)
+                .body("description", equalTo("second"))
+                .body("friendlyName", equalTo("Friendly"))
+                .body("labels.a", nullValue())
+                .body("labels.b", equalTo("2"))
+                .body("labels.c", equalTo("3"));
+
+        // PUT replaces everything that is left out
+        given().contentType(ContentType.JSON).body("{\"description\":\"third\"}")
+                .when().put("/bigquery/v2/projects/{p}/datasets/{d}", projectId, id)
+                .then().statusCode(200)
+                .body("description", equalTo("third"))
+                .body("friendlyName", nullValue())
+                .body("labels", anyOf(nullValue(), anEmptyMap()));
+
+        given().when().get("/bigquery/v2/projects/{p}/datasets/{d}", projectId, id)
+                .then().body("description", equalTo("third"));
+
+        given().when().delete("/bigquery/v2/projects/{p}/datasets/{d}", projectId, id).then().statusCode(204);
+    }
+
+    @Test
+    void updateUnknownDatasetReturnsNotFound() {
+        given().contentType(ContentType.JSON).body("{\"description\":\"x\"}")
+                .when().patch("/bigquery/v2/projects/{p}/datasets/{d}", projectId, "no_such_dataset").then().statusCode(404);
+        given().contentType(ContentType.JSON).body("{\"description\":\"x\"}")
+                .when().put("/bigquery/v2/projects/{p}/datasets/{d}", projectId, "no_such_dataset").then().statusCode(404);
+    }
 }

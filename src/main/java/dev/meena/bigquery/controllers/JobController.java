@@ -1,5 +1,6 @@
 package dev.meena.bigquery.controllers;
 
+import dev.meena.bigquery.responses.JobResponses;
 import dev.meena.bigquery.responses.TableResponses;
 import dev.meena.bigquery.responses.Errors;
 import dev.meena.bigquery.dialect.Bq2Psql;
@@ -29,6 +30,8 @@ import static org.apache.commons.lang3.StringUtils.isBlank;
 @Path("/bigquery/v2/projects/{projectId}/jobs")
 @Produces(MediaType.APPLICATION_JSON)
 public class JobController {
+
+    private static final int DEFAULT_PAGE_SIZE = 50;
 
     @Inject
     PgJobStorage jobStorage;
@@ -79,6 +82,23 @@ public class JobController {
     }
 
     @GET
+    public Response listJobs(@PathParam("projectId") String projectId,
+                             @QueryParam("maxResults") Integer maxResults,
+                             @QueryParam("pageToken") String pageToken,
+                             @QueryParam("stateFilter") String stateFilter) {
+        long offset = TableController.parseOffset(pageToken);
+        int limit = maxResults == null || maxResults <= 0 ? DEFAULT_PAGE_SIZE : maxResults;
+
+        try {
+            PgJobStorage.JobPage page = jobStorage.list(projectId, offset, limit, stateFilter);
+            String next = page.hasMore() ? String.valueOf(offset + page.jobs().size()) : null;
+            return Response.ok(JobResponses.jobList(projectId, page.jobs(), next)).build();
+        } catch (RuntimeException e) {
+            return Errors.toError(e);
+        }
+    }
+
+    @GET
     @Path("/{jobId}")
     public Response getJob(@PathParam("projectId") String projectId, @PathParam("jobId") String jobId) {
         Job job = jobStorage.jobDefinition(projectId, jobId);
@@ -86,6 +106,16 @@ public class JobController {
             return Errors.bigQueryError(Response.Status.NOT_FOUND, "Not found: Job " + projectId + ":" + jobId);
 
         return Response.ok(job).build();
+    }
+
+    @POST
+    @Path("/{jobId}/cancel")
+    public Response cancelJob(@PathParam("projectId") String projectId, @PathParam("jobId") String jobId) {
+        Job job = jobStorage.jobDefinition(projectId, jobId);
+        if (job == null)
+            return Errors.bigQueryError(Response.Status.NOT_FOUND, "Not found: Job " + projectId + ":" + jobId);
+
+        return Response.ok(JobResponses.cancel(job)).build();
     }
 
     @DELETE

@@ -1,5 +1,6 @@
 package dev.meena.bigquery.responses;
 
+import dev.meena.bigquery.db.Metadata;
 import dev.meena.bigquery.model.Dataset;
 import dev.meena.bigquery.model.DatasetList;
 import dev.meena.bigquery.model.DatasetListDatasetsInner;
@@ -21,20 +22,16 @@ public final class DatasetResponses {
         return new DatasetReference().projectId(projectId).datasetId(datasetId);
     }
 
-    /**
-     * A dataset; description and friendly name are copied from {@code requested} (the insert body) when given.
-     */
-    public static Dataset dataset(String projectId, String datasetId, Dataset requested) {
+    public static Dataset dataset(String projectId, String datasetId, Metadata metadata) {
         String now = String.valueOf(System.currentTimeMillis());
         Dataset dataset = new Dataset(now, "\"" + projectId + ":" + datasetId + "\"", projectId + ":" + datasetId,
                 "bigquery#dataset", now, null, null,
                 "/bigquery/v2/projects/" + projectId + "/datasets/" + datasetId, null, "DEFAULT");
         dataset.setDatasetReference(reference(projectId, datasetId));
         dataset.setLocation(LOCATION);
-        if (requested != null) {
-            dataset.setDescription(requested.getDescription());
-            dataset.setFriendlyName(requested.getFriendlyName());
-        }
+        dataset.setDescription(metadata.description());
+        dataset.setFriendlyName(metadata.friendlyName());
+        dataset.setLabels(metadata.labels());
         return dataset;
     }
 

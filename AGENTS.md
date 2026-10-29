@@ -54,13 +54,15 @@ src/main/java/dev/meena/bigquery/
 ├── controllers/                     # One controller per REST resource
 │   ├── MainController.java          # Root health check (GET /) & direct SQL translation/execution (POST /)
 │   ├── QueryController.java         # /projects/{p}/queries (sync query, query results)
-│   ├── JobController.java           # /projects/{p}/jobs (create, get, delete)
-│   ├── DatasetController.java       # /projects/{p}/datasets (list, get, insert, delete) -> Postgres schemas
-│   ├── TableController.java         # /projects/{p}/datasets/{d}/tables (list, get, insert, delete)
+│   ├── JobController.java           # /projects/{p}/jobs (list, create, get, cancel, delete)
+│   ├── DatasetController.java       # /projects/{p}/datasets (list, get, insert, patch, update, delete) -> Postgres schemas
+│   ├── TableController.java         # /projects/{p}/datasets/{d}/tables (list, get, insert, patch, update, delete)
 │   ├── TableDataController.java     # .../tables/{t}/data & insertAll
 │   └── UnimplementedController.java # 501 catch-all for any other /bigquery/v2/** call
 ├── db/
 │   ├── Catalog.java                 # Parameterized information_schema lookups (datasets, tables, columns)
+│   ├── Metadata.java                # Description / friendly name / labels, stored as JSON object comments
+│   ├── MetadataStore.java           # Reads & writes Metadata on Postgres schemas and tables
 │   └── Postgres.java                # JDBC query execution, DDL execution, row counting, batch insertAll
 ├── dialect/
 │   ├── SqlSyntaxConverter.java      # Interface for BigQuery -> target SQL conversion
@@ -79,6 +81,7 @@ src/main/java/dev/meena/bigquery/
     ├── CellValues.java              # Postgres value -> REST cell value encoding
     ├── TableResponses.java          # Table, table list and table data payloads
     ├── DatasetResponses.java        # Dataset and dataset list payloads
+    ├── JobResponses.java            # Job list and cancel payloads
     ├── JobBuilder.java              # Fluent builder for BigQuery Job responses
     └── UnimplementedResponse.java   # Diagnostic response for unimplemented REST paths
 ```

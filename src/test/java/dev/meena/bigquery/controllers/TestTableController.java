@@ -130,4 +130,41 @@ public class TestTableController {
         given().when().get("/bigquery/v2/projects/{p}/routines", projectId)
                 .then().statusCode(501).body("path", equalTo("/bigquery/v2/projects/test/routines"));
     }
+
+    @Test
+    void patchAndPutTableMetadataAndAddColumns() {
+        String name = "upd_" + System.nanoTime();
+        String base = "/bigquery/v2/projects/{p}/datasets/{d}/tables";
+        given().contentType(ContentType.JSON)
+                .body("{\"tableReference\":{\"tableId\":\"" + name + "\"},\"description\":\"d1\",\"friendlyName\":\"F\","
+                        + "\"labels\":{\"x\":\"1\"},\"schema\":{\"fields\":[{\"name\":\"a\",\"type\":\"STRING\"}]}}")
+                .when().post(base, projectId, datasetId).then().statusCode(200).body("description", equalTo("d1"));
+
+        given().contentType(ContentType.JSON)
+                .body("{\"description\":\"d2\",\"schema\":{\"fields\":[{\"name\":\"a\",\"type\":\"STRING\"},{\"name\":\"B\",\"type\":\"INT64\"}]}}")
+                .when().patch(base + "/{t}", projectId, datasetId, name)
+                .then().statusCode(200)
+                .body("description", equalTo("d2"))
+                .body("friendlyName", equalTo("F"))
+                .body("labels.x", equalTo("1"))
+                .body("schema.fields.name", contains("a", "b"))
+                .body("schema.fields.type", contains("STRING", "INTEGER"));
+
+        given().contentType(ContentType.JSON).body("{\"friendlyName\":\"G\"}")
+                .when().put(base + "/{t}", projectId, datasetId, name)
+                .then().statusCode(200)
+                .body("friendlyName", equalTo("G"))
+                .body("description", nullValue());
+
+        given().when().get(base + "/{t}", projectId, datasetId, name).then().body("friendlyName", equalTo("G"));
+        given().when().delete(base + "/{t}", projectId, datasetId, name).then().statusCode(204);
+    }
+
+    @Test
+    void updateUnknownTableReturnsNotFound() {
+        given().contentType(ContentType.JSON).body("{\"description\":\"x\"}")
+                .when().patch("/bigquery/v2/projects/{p}/datasets/{d}/tables/nope", projectId, datasetId).then().statusCode(404);
+        given().contentType(ContentType.JSON).body("{\"description\":\"x\"}")
+                .when().put("/bigquery/v2/projects/{p}/datasets/{d}/tables/nope", projectId, datasetId).then().statusCode(404);
+    }
 }

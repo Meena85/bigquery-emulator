@@ -1,6 +1,7 @@
 package dev.meena.bigquery.responses;
 
 import dev.meena.bigquery.db.Catalog;
+import dev.meena.bigquery.db.Metadata;
 import dev.meena.bigquery.db.Postgres;
 import dev.meena.bigquery.dialect.BqTypes;
 import dev.meena.bigquery.model.*;
@@ -57,7 +58,8 @@ public final class TableResponses {
      * Storage statistics are not tracked; only the row count is real.
      */
     public static Table table(String projectId, String datasetId, String tableId, Catalog.TableInfo info,
-                              List<Catalog.ColumnInfo> columns, Set<String> selectedFields, long numRows) {
+                              List<Catalog.ColumnInfo> columns, Set<String> selectedFields, long numRows,
+                              Metadata metadata) {
         List<TableFieldSchema> fields = columns.stream()
                 .filter(c -> selectedFields == null || selectedFields.contains(c.name().toLowerCase()))
                 .map(c -> {
@@ -76,7 +78,9 @@ public final class TableResponses {
                 "/bigquery/v2/projects/" + projectId + "/datasets/" + datasetId + "/tables/" + tableId,
                 info.view() ? "VIEW" : "TABLE");
         table.setKind("bigquery#table");
-        table.setFriendlyName(tableId);
+        table.setFriendlyName(metadata.friendlyName());
+        table.setDescription(metadata.description());
+        table.setLabels(metadata.labels());
         table.setTableReference(tableReference(projectId, datasetId, tableId));
         table.setSchema(new TableSchema().fields(fields));
         return table;
