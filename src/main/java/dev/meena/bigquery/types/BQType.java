@@ -38,6 +38,6 @@ public class BQType {
     public static TableDataList tableDataList(Postgres.QueryResult result) {
         return new TableDataList()
                 .totalRows(String.valueOf(result.rows().size()))
-                .rows(Fn.tableRows(result.rows()));
+                .rows(Fn.tableRows(result.columns(), result.rows()));
     }
 }

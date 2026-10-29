@@ -1,15 +1,22 @@
 package dev.meena.bigquery.fn;
 
 import dev.meena.bigquery.db.Postgres;
+import dev.meena.bigquery.dialect.BqTypes;
 import dev.meena.bigquery.model.*;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.ws.rs.core.Response;
 import org.apache.calcite.sql.parser.SqlParseException;
+import org.postgresql.util.PGInterval;
 
-import java.sql.Types;
-import java.time.LocalDate;
+import java.lang.reflect.Array;
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 
 import static org.apache.commons.lang3.StringUtils.isBlank;
@@ -26,26 +33,51 @@ public class Fn {
         }
     }
 
-    public static String toBigQueryType(int jdbcType) {
-        return switch (jdbcType) {
-            case Types.BIGINT, Types.INTEGER, Types.SMALLINT, Types.TINYINT -> "INTEGER";
-            case Types.NUMERIC, Types.DECIMAL, Types.DOUBLE, Types.FLOAT, Types.REAL -> "FLOAT";
-            case Types.BOOLEAN, Types.BIT -> "BOOLEAN";
-            case Types.DATE -> "DATE";
-            case Types.TIME, Types.TIME_WITH_TIMEZONE -> "TIME";
-            case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> "TIMESTAMP";
-            default -> "STRING";
+    /**
+     * Encodes a value read from Postgres the way the BigQuery REST API writes it: everything is a string
+     * (INTEGER, FLOAT, NUMERIC, BOOLEAN, JSON, ...), TIMESTAMP is epoch seconds, BYTES is base64 and
+     * repeated columns are lists of cells.
+     */
+    public static Object toBigQueryValue(Object value, BqTypes.BqType type) {
+        return switch (value) {
+            case null -> null;
+            case byte[] bytes -> Base64.getEncoder().encodeToString(bytes);
+            case java.sql.Array array -> throw new IllegalStateException("Arrays must be read with getArray(): " + array);
+            case Object array when array.getClass().isArray() -> {
+                var element = new BqTypes.BqType(type.type(), false);
+                List<TableCell> cells = new ArrayList<>();
+                for (int i = 0; i < Array.getLength(array); i++)
+                    cells.add(new TableCell().v(toBigQueryValue(Array.get(array, i), element)));
+                yield cells;
+            }
+            case OffsetDateTime dateTime -> epochSeconds(dateTime.toInstant());
+            case java.sql.Timestamp timestamp -> "TIMESTAMP".equals(type.type())
+                    ? epochSeconds(timestamp.toInstant())
+                    : DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(timestamp.toLocalDateTime());
+            case LocalDateTime dateTime -> DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(dateTime);
+            case java.sql.Time time -> DateTimeFormatter.ISO_LOCAL_TIME.format(time.toLocalTime());
+            case LocalTime time -> DateTimeFormatter.ISO_LOCAL_TIME.format(time);
+            case BigDecimal decimal -> decimal.toPlainString();
+            case PGInterval interval -> interval(interval);
+            default -> String.valueOf(value);
         };
     }
 
-    public static Object toBigQueryValue(Object value) {
-        return switch (value) {
-            case null -> null;
-            case LocalDate localDate -> localDate.toString();
-            case LocalDateTime localDateTime -> localDateTime.toString();
-            case OffsetDateTime offsetDateTime -> offsetDateTime.toString();
-            default -> String.valueOf(value);
-        };
+    /** BigQuery's canonical interval: {@code [-]Y-M [-]D [-]H:M:S[.F]}. */
+    private static String interval(PGInterval i) {
+        boolean negativeMonths = i.getYears() < 0 || i.getMonths() < 0;
+        boolean negativeTime = i.getHours() < 0 || i.getMinutes() < 0 || i.getSeconds() < 0;
+        return (negativeMonths ? "-" : "") + Math.abs(i.getYears()) + "-" + Math.abs(i.getMonths())
+                + " " + i.getDays()
+                + " " + (negativeTime ? "-" : "") + Math.abs(i.getHours()) + ":" + Math.abs(i.getMinutes()) + ":"
+                + BigDecimal.valueOf(Math.abs(i.getSeconds())).stripTrailingZeros().toPlainString();
+    }
+
+    /** Epoch seconds with microsecond precision, e.g. {@code 1577836800.123456}. */
+    private static String epochSeconds(Instant instant) {
+        BigDecimal seconds = BigDecimal.valueOf(instant.getEpochSecond())
+                .add(BigDecimal.valueOf(instant.getNano() / 1_000, 6));
+        return seconds.stripTrailingZeros().toPlainString();
     }
 
     /**
@@ -118,7 +150,7 @@ public class Fn {
         r.setTotalRows(String.valueOf(result.rows().size()));
         r.setJobReference(jobReference(projectId, jobId, location));
         r.setSchema(tableSchema(result.columns()));
-        r.setRows(tableRows(result.rows()));
+        r.setRows(tableRows(result.columns(), result.rows()));
         return r;
     }
 
@@ -131,7 +163,7 @@ public class Fn {
         r.setTotalRows(String.valueOf(result.rows().size()));
         r.setJobReference(jobReference(projectId, jobId, location));
         r.setSchema(tableSchema(result.columns()));
-        r.setRows(tableRows(result.rows()));
+        r.setRows(tableRows(result.columns(), result.rows()));
         return r;
     }
 
@@ -145,18 +177,25 @@ public class Fn {
 
     public static TableSchema tableSchema(List<Postgres.Column> columns) {
         var schema = new TableSchema();
-        schema.setFields(columns.stream().map(column -> new TableFieldSchema()
-                .name(column.name())
-                .type(toBigQueryType(column.jdbcType()))
-                .mode("NULLABLE")).toList());
+        schema.setFields(columns.stream().map(column -> {
+            BqTypes.BqType type = BqTypes.fromPg(column.databaseTypeName());
+            return new TableFieldSchema()
+                    .name(column.name())
+                    .type(type.type())
+                    .mode(type.repeated() ? "REPEATED" : "NULLABLE");
+        }).toList());
         return schema;
     }
 
-    public static List<TableRow> tableRows(List<List<Object>> rows) {
+    public static List<TableRow> tableRows(List<Postgres.Column> columns, List<List<Object>> rows) {
+        List<BqTypes.BqType> types = columns.stream().map(c -> BqTypes.fromPg(c.databaseTypeName())).toList();
         return rows.stream()
-                .map(source -> new TableRow().f(source.stream()
-                        .map(value -> new TableCell().v(toBigQueryValue(value)))
-                        .toList()))
+                .map(source -> {
+                    List<TableCell> cells = new ArrayList<>(source.size());
+                    for (int i = 0; i < source.size(); i++)
+                        cells.add(new TableCell().v(toBigQueryValue(source.get(i), types.get(i))));
+                    return new TableRow().f(cells);
+                })
                 .toList();
     }
 

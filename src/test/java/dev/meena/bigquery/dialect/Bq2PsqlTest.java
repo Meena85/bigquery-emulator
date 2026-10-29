@@ -75,7 +75,7 @@ class Bq2PsqlTest {
         Bq2Psql bq = new Bq2Psql();
 
         String translated = bq.translate("CREATE OR REPLACE TABLE `public`.`table` AS SELECT 1", "projectID2");
-        assertEquals("CREATE OR REPLACE TABLE \"projectid2$public\".table AS SELECT 1", translated);
+        assertEquals("DROP TABLE IF EXISTS \"projectid2$public\".table; CREATE TABLE \"projectid2$public\".table AS SELECT 1", translated);
     }
 
     @Test
@@ -130,5 +130,71 @@ class Bq2PsqlTest {
         rowContainer.setInsertId("id");
         rowContainer.setJson(row);
         return rowContainer;
+    }
+
+    @Test
+    void createTableTranslatesEveryBigQueryType() throws SqlParseException {
+        Bq2Psql bq = new Bq2Psql();
+
+        String translated = bq.translate("""
+                CREATE OR REPLACE TABLE `proj`.`ds`.`all_types` (
+                  c_int INT64 NOT NULL,
+                  c_float FLOAT64,
+                  c_numeric NUMERIC(10, 2),
+                  c_bignumeric BIGNUMERIC,
+                  c_bool BOOL,
+                  c_string STRING(10) OPTIONS(description = 'a, b (c)'),
+                  c_bytes BYTES,
+                  c_date DATE,
+                  c_time TIME,
+                  c_datetime DATETIME,
+                  c_timestamp TIMESTAMP,
+                  c_geo GEOGRAPHY,
+                  c_json JSON,
+                  c_interval INTERVAL,
+                  c_range RANGE<DATE>,
+                  c_array ARRAY<INT64>,
+                  c_struct STRUCT<a INT64, b ARRAY<STRING>>,
+                  c_struct_array ARRAY<STRUCT<a INT64, b STRING>>
+                )
+                PARTITION BY DATE(c_timestamp)
+                CLUSTER BY c_int
+                OPTIONS(description = 'x')
+                """);
+
+        assertEquals("DROP TABLE IF EXISTS \"proj$ds\".all_types; CREATE TABLE \"proj$ds\".all_types ("
+                + "\"c_int\" BIGINT NOT NULL, \"c_float\" DOUBLE PRECISION, \"c_numeric\" NUMERIC(10,2), \"c_bignumeric\" NUMERIC, "
+                + "\"c_bool\" BOOLEAN, \"c_string\" TEXT, \"c_bytes\" BYTEA, \"c_date\" DATE, \"c_time\" TIME, "
+                + "\"c_datetime\" TIMESTAMP, \"c_timestamp\" TIMESTAMPTZ, \"c_geo\" TEXT, \"c_json\" JSONB, \"c_interval\" INTERVAL, "
+                + "\"c_range\" DATERANGE, \"c_array\" BIGINT[], \"c_struct\" JSONB, \"c_struct_array\" JSONB[])", translated);
+    }
+
+    @Test
+    void createTableWithoutSpaceBeforeColumnsAndLowercasesColumnNames() throws SqlParseException {
+        Bq2Psql bq = new Bq2Psql();
+
+        assertEquals("CREATE TABLE IF NOT EXISTS \"p$d\".t (\"mixedcase\" TEXT, \"n\" BIGINT)",
+                bq.translate("CREATE TABLE IF NOT EXISTS d.t(MixedCase STRING, `n` INT64)", "p"));
+    }
+
+    @Test
+    void createTableAsSelectTranslatesTheQuery() throws SqlParseException {
+        Bq2Psql bq = new Bq2Psql();
+
+        assertEquals("CREATE TABLE \"p$d\".copy AS SELECT *\nFROM \"p$d\".src",
+                bq.translate("CREATE TABLE d.copy OPTIONS(description='x') AS SELECT * FROM `d`.`src`", "p"));
+    }
+
+    @Test
+    void insertAllMatchesColumnsCaseInsensitively() {
+        Bq2Psql bq = new Bq2Psql();
+        TableDataInsertAllRequestRowsInner row = new TableDataInsertAllRequestRowsInner();
+        row.setJson(new LinkedHashMap<>(Map.of("MixedCase", "v")));
+        TableDataInsertAllRequest request = new TableDataInsertAllRequest();
+        request.setRows(List.of(row));
+
+        Bq2Psql.InsertAll insertAll = bq.insertAll(request, "p", "d", "t");
+        assertEquals(List.of("mixedcase"), insertAll.columns());
+        assertArrayEquals(new Object[]{"v"}, insertAll.rows().getFirst());
     }
 }

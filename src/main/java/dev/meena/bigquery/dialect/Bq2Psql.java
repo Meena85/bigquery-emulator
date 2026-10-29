@@ -116,22 +116,130 @@ public class Bq2Psql implements SqlSyntaxConverter {
         return sql.toString();
     }
 
-    private static String translateCreateTable(String bqSql, String defaultProject) {
+    private String translateCreateTable(String bqSql, String defaultProject) throws SqlParseException {
         Matcher matcher = CREATE_TABLE_PATTERN.matcher(bqSql);
         if (!matcher.matches()) return null;
 
-        String orReplace = matcher.group(1) == null ? "" : "OR REPLACE ";
+        boolean orReplace = matcher.group(1) != null;
         String ifNotExists = matcher.group(2) == null ? "" : "IF NOT EXISTS ";
         String tableAndSuffix = matcher.group(3).trim();
         IdentifierAndSuffix identifierAndSuffix = splitLeadingIdentifier(tableAndSuffix);
         SqlIdentifier rewritten = rewriteTableIdentifier(toSqlIdentifier(identifierAndSuffix.identifier()), defaultProject);
 
-        StringBuilder sql = new StringBuilder("CREATE ");
-        sql.append(orReplace).append("TABLE ").append(ifNotExists).append(rewritten.toSqlString(BqToPgDialect.INSTANCE).getSql());
-        if (!identifierAndSuffix.suffix().isBlank()) {
-            sql.append(" ").append(identifierAndSuffix.suffix().trim());
+        String table = rewritten.toSqlString(BqToPgDialect.INSTANCE).getSql();
+
+        // Postgres has no CREATE OR REPLACE TABLE
+        StringBuilder sql = new StringBuilder(orReplace ? "DROP TABLE IF EXISTS " + table + "; " : "");
+        sql.append("CREATE TABLE ").append(ifNotExists).append(table);
+
+        String suffix = identifierAndSuffix.suffix().trim();
+        if (suffix.startsWith("(")) {
+            int end = matchingParen(suffix, 0);
+            sql.append(" (").append(translateColumns(suffix.substring(1, end))).append(")");
+            suffix = suffix.substring(end + 1).trim();
         }
+
+        // PARTITION BY / CLUSTER BY / OPTIONS(...) have no Postgres equivalent and are dropped.
+        int as = indexOfTopLevelKeyword(suffix, "AS");
+        if (as >= 0)
+            sql.append(" AS ").append(translate(suffix.substring(as + 2).trim(), defaultProject));
+
         return sql.toString();
+    }
+
+    /** Translates the column list of a CREATE TABLE: BigQuery types become Postgres types and OPTIONS(...) is dropped. */
+    static String translateColumns(String columns) {
+        List<String> translated = new ArrayList<>();
+        for (String column : splitTopLevel(columns, ',')) {
+            String definition = column.trim();
+            if (definition.isEmpty()) continue;
+
+            IdentifierAndSuffix nameAndRest = splitLeadingIdentifier(definition);
+            String rest = nameAndRest.suffix();
+
+            // The type runs until the first column attribute (NOT NULL, DEFAULT, OPTIONS, ...)
+            int typeEnd = rest.length();
+            for (String keyword : List.of("NOT", "DEFAULT", "OPTIONS", "PRIMARY", "REFERENCES", "COLLATE")) {
+                int at = indexOfTopLevelKeyword(rest, keyword);
+                if (at >= 0) typeEnd = Math.min(typeEnd, at);
+            }
+            String type = BqTypes.toPg(rest.substring(0, typeEnd));
+            String attributes = removeOptions(rest.substring(typeEnd)).trim();
+
+            String name = nameAndRest.identifier().replace("`", "");
+            translated.add(quoteIdentifier(name.toLowerCase(Locale.ROOT)) + " " + type + (attributes.isEmpty() ? "" : " " + attributes));
+        }
+        return String.join(", ", translated);
+    }
+
+    private static String removeOptions(String attributes) {
+        int at = indexOfTopLevelKeyword(attributes, "OPTIONS");
+        if (at < 0) return attributes;
+        int open = attributes.indexOf('(', at);
+        int close = matchingParen(attributes, open);
+        return attributes.substring(0, at) + removeOptions(attributes.substring(close + 1));
+    }
+
+    private static int matchingParen(String text, int open) {
+        int depth = 0;
+        for (int i = open; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\'' || c == '"') {
+                i = skipQuoted(text, i);
+            } else if (c == '(') {
+                depth++;
+            } else if (c == ')' && --depth == 0) {
+                return i;
+            }
+        }
+        throw new IllegalArgumentException("Unbalanced parentheses in: " + text);
+    }
+
+    private static int skipQuoted(String text, int start) {
+        char quote = text.charAt(start);
+        int i = start + 1;
+        while (i < text.length() && text.charAt(i) != quote)
+            i += text.charAt(i) == '\\' ? 2 : 1;
+        return i;
+    }
+
+    /** Splits on {@code separator} where it is not nested in (), <> or quotes. */
+    private static List<String> splitTopLevel(String text, char separator) {
+        List<String> parts = new ArrayList<>();
+        int depth = 0;
+        int start = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\'' || c == '"' || c == '`') i = skipQuoted(text, i);
+            else if (c == '(' || c == '<') depth++;
+            else if (c == ')' || c == '>') depth--;
+            else if (c == separator && depth == 0) {
+                parts.add(text.substring(start, i));
+                start = i + 1;
+            }
+        }
+        parts.add(text.substring(start));
+        return parts;
+    }
+
+    /** Index of {@code keyword} as a whole word outside of brackets and quotes, or -1. */
+    private static int indexOfTopLevelKeyword(String text, String keyword) {
+        int depth = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\'' || c == '"' || c == '`') {
+                i = skipQuoted(text, i);
+            } else if (c == '(' || c == '<') {
+                depth++;
+            } else if (c == ')' || c == '>') {
+                depth--;
+            } else if (depth == 0 && text.regionMatches(true, i, keyword, 0, keyword.length())
+                    && (i == 0 || !Character.isLetterOrDigit(text.charAt(i - 1)) && text.charAt(i - 1) != '_')
+                    && (i + keyword.length() >= text.length() || !Character.isLetterOrDigit(text.charAt(i + keyword.length())) && text.charAt(i + keyword.length()) != '_')) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static SqlIdentifier toSqlIdentifier(String rawIdentifier) {
@@ -179,7 +287,7 @@ public class Bq2Psql implements SqlSyntaxConverter {
                 i++;
                 continue;
             }
-            if (!inBackticks && Character.isWhitespace(c)) {
+            if (!inBackticks && (Character.isWhitespace(c) || c == '(')) {
                 break;
             }
             identifier.append(c);
@@ -285,7 +393,8 @@ public class Bq2Psql implements SqlSyntaxConverter {
             throw new IllegalArgumentException("At least one non-null JSON field is required");
         }
 
-        List<String> columnNames = new ArrayList<>(columns.keySet());
+        // Identifiers in translated queries are unquoted and so folded to lower case by Postgres
+        List<String> columnNames = columns.keySet().stream().map(c -> c.toLowerCase(Locale.ROOT)).distinct().toList();
 
         String preparedSql = "INSERT INTO " + quoteIdentifier(schema) + "." + quoteIdentifier(table) +
                 " (" + columnNames.stream().map(Bq2Psql::quoteIdentifier).collect(joining(", ")) + ")" +
@@ -296,9 +405,11 @@ public class Bq2Psql implements SqlSyntaxConverter {
         for (TableDataInsertAllRequestRowsInner row : req.getRows()) {
             int i = 0;
             Object[] insertRow = new Object[columnNames.size()];
-            for (String columnName : columnNames) {
-                insertRow[i++] = row.getJson() == null ? null : row.getJson().getOrDefault(columnName, null);
-            }
+            Map<String, Object> values = new LinkedHashMap<>();
+            if (row.getJson() != null)
+                row.getJson().forEach((name, value) -> values.put(name.toLowerCase(Locale.ROOT), value));
+            for (String columnName : columnNames)
+                insertRow[i++] = values.get(columnName);
             insert.add(insertRow);
         }
 

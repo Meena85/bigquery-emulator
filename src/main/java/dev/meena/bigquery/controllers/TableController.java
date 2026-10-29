@@ -2,6 +2,7 @@ package dev.meena.bigquery.controllers;
 
 import dev.meena.bigquery.db.Catalog;
 import dev.meena.bigquery.db.Postgres;
+import dev.meena.bigquery.dialect.BqTypes;
 import dev.meena.bigquery.fn.Fn;
 import dev.meena.bigquery.model.*;
 import dev.meena.bigquery.types.BQType;
@@ -112,7 +113,7 @@ public class TableController {
                         "Already Exists: Table " + projectId + ":" + datasetId + "." + tableId);
 
             String columns = fields.stream()
-                    .map(f -> Fn.pgQuote(f.getName()) + " " + toPgType(f)
+                    .map(f -> Fn.pgQuote(f.getName().toLowerCase()) + " " + toPgType(f)
                             + ("REQUIRED".equalsIgnoreCase(f.getMode()) ? " NOT NULL" : ""))
                     .collect(Collectors.joining(", "));
             postgres.execute("CREATE TABLE " + Fn.pgQuote(schema) + "." + Fn.pgQuote(tableId) + " (" + columns + ")");
@@ -151,10 +152,13 @@ public class TableController {
 
         List<TableFieldSchema> fields = catalog.columns(schema, info.name()).stream()
                 .filter(c -> selected == null || selected.contains(c.name().toLowerCase()))
-                .map(c -> new TableFieldSchema()
-                        .name(c.name())
-                        .type(toBigQueryType(c.dataType()))
-                        .mode(c.nullable() ? "NULLABLE" : "REQUIRED"))
+                .map(c -> {
+                    BqTypes.BqType type = BqTypes.fromPg(c.pgType());
+                    return new TableFieldSchema()
+                            .name(c.name())
+                            .type(type.type())
+                            .mode(type.repeated() ? "REPEATED" : c.nullable() ? "NULLABLE" : "REQUIRED");
+                })
                 .toList();
 
         long numRows = postgres.count("SELECT COUNT(*) FROM " + Fn.pgQuote(schema) + "." + Fn.pgQuote(info.name()));
@@ -173,39 +177,12 @@ public class TableController {
         return table;
     }
 
-    private static String toBigQueryType(String postgresDataType) {
-        if (postgresDataType == null)
-            return "STRING";
-
-        return switch (postgresDataType.toLowerCase()) {
-            case "bigint", "integer", "smallint", "serial", "bigserial", "smallserial" -> "INTEGER";
-            case "real", "double precision" -> "FLOAT";
-            case "numeric", "decimal" -> "NUMERIC";
-            case "boolean" -> "BOOLEAN";
-            case "date" -> "DATE";
-            case "time without time zone", "time with time zone" -> "TIME";
-            case "timestamp without time zone" -> "DATETIME";
-            case "timestamp with time zone" -> "TIMESTAMP";
-            case "json", "jsonb" -> "JSON";
-            case "bytea" -> "BYTES";
-            default -> "STRING";
-        };
-    }
-
     private static String toPgType(TableFieldSchema field) {
-        String type = switch (field.getType() == null ? "STRING" : field.getType().toUpperCase()) {
-            case "INTEGER", "INT64" -> "BIGINT";
-            case "FLOAT", "FLOAT64" -> "DOUBLE PRECISION";
-            case "NUMERIC", "BIGNUMERIC", "DECIMAL" -> "NUMERIC";
-            case "BOOLEAN", "BOOL" -> "BOOLEAN";
-            case "DATE" -> "DATE";
-            case "TIME" -> "TIME";
-            case "DATETIME" -> "TIMESTAMP";
-            case "TIMESTAMP" -> "TIMESTAMPTZ";
-            case "BYTES" -> "BYTEA";
-            case "JSON", "RECORD", "STRUCT" -> "JSONB";
-            default -> "TEXT";
-        };
+        String bqType = field.getType();
+        if ("RANGE".equalsIgnoreCase(bqType) && field.getRangeElementType() != null)
+            bqType = "RANGE<" + field.getRangeElementType().getType() + ">";
+
+        String type = BqTypes.toPg(bqType);
         return "REPEATED".equalsIgnoreCase(field.getMode()) ? type + "[]" : type;
     }
 

@@ -12,6 +12,7 @@ import java.sql.*;
 import java.sql.Date;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.logging.Level;
@@ -53,7 +54,7 @@ public class Postgres {
                 while (rs.next()) {
                     List<Object> row = new ArrayList<>();
                     for (int i = 1; i <= numColumns; i++) {
-                        row.add(rs.getObject(i));
+                        row.add(readValue(rs, i, columns.get(i - 1).databaseTypeName()));
                     }
                     rows.add(row);
                 }
@@ -64,6 +65,24 @@ public class Postgres {
             log.log(Level.SEVERE, "[QUERY] query=" + query, ex);
             throw new IllegalStateException("Unable to execute query, sql=" + query, ex);
         }
+    }
+
+    /** Reads a column with a Java type that keeps full precision (no JVM time zone, no truncated micros). */
+    private static Object readValue(ResultSet rs, int index, String pgType) throws SQLException {
+        String type = pgType == null ? "" : pgType.toLowerCase(Locale.ROOT);
+        if (type.startsWith("_")) {
+            Array array = rs.getArray(index);
+            return array == null ? null : array.getArray();
+        }
+
+        return switch (type) {
+            case "timestamp" -> rs.getObject(index, LocalDateTime.class);
+            case "timestamptz" -> rs.getObject(index, OffsetDateTime.class);
+            case "date" -> rs.getObject(index, LocalDate.class);
+            case "time" -> rs.getObject(index, LocalTime.class);
+            case "bytea" -> rs.getBytes(index);
+            default -> rs.getObject(index);
+        };
     }
 
     public long count(String query) {
@@ -190,81 +209,10 @@ public class Postgres {
     }
 
     private void setStatementValue(PreparedStatement stmt, int parameterIndex, Object value, ColumnDefinition column) throws SQLException {
-        if (value == null) {
+        if (value == null)
             stmt.setNull(parameterIndex, column.jdbcType());
-            return;
-        }
-
-        String databaseTypeName =
-                column.databaseTypeName() == null ? ""
-                        : column.databaseTypeName().toLowerCase(Locale.ROOT);
-
-        if ("json".equalsIgnoreCase(databaseTypeName) || "jsonb".equalsIgnoreCase(databaseTypeName)) {
-            PGobject json = new PGobject();
-            json.setType(databaseTypeName);
-            json.setValue(String.valueOf(value));
-            stmt.setObject(parameterIndex, json);
-            return;
-        }
-
-        switch (column.jdbcType()) {
-            case Types.DATE -> {
-                if (value instanceof java.sql.Date date)
-                    stmt.setDate(parameterIndex, date);
-                else if (value instanceof LocalDate localDate)
-                    stmt.setDate(parameterIndex, Date.valueOf(localDate));
-                else
-                    stmt.setDate(parameterIndex, Date.valueOf(String.valueOf(value)));
-            }
-            case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> {
-                switch (value) {
-                    case Timestamp timestamp -> stmt.setTimestamp(parameterIndex, timestamp);
-                    case LocalDateTime localDateTime ->
-                            stmt.setTimestamp(parameterIndex, Timestamp.valueOf(localDateTime));
-                    case OffsetDateTime offsetDateTime -> stmt.setObject(parameterIndex, offsetDateTime);
-                    default -> stmt.setTimestamp(parameterIndex, Timestamp.valueOf(String.valueOf(value)));
-                }
-            }
-            case Types.BOOLEAN, Types.BIT -> {
-                if (value instanceof Boolean bool)
-                    stmt.setBoolean(parameterIndex, bool);
-                else
-                    stmt.setBoolean(parameterIndex, Boolean.parseBoolean(String.valueOf(value)));
-            }
-            case Types.INTEGER, Types.SMALLINT, Types.TINYINT -> {
-                if (value instanceof Number number)
-                    stmt.setInt(parameterIndex, number.intValue());
-                else
-                    stmt.setInt(parameterIndex, Integer.parseInt(String.valueOf(value)));
-            }
-            case Types.BIGINT -> {
-                if (value instanceof Number number)
-                    stmt.setLong(parameterIndex, number.longValue());
-                else
-                    stmt.setLong(parameterIndex, Long.parseLong(String.valueOf(value)));
-            }
-            case Types.FLOAT, Types.REAL -> {
-                if (value instanceof Number number)
-                    stmt.setFloat(parameterIndex, number.floatValue());
-                else
-                    stmt.setFloat(parameterIndex, Float.parseFloat(String.valueOf(value)));
-            }
-            case Types.DOUBLE -> {
-                if (value instanceof Number number)
-                    stmt.setDouble(parameterIndex, number.doubleValue());
-                else
-                    stmt.setDouble(parameterIndex, Double.parseDouble(String.valueOf(value)));
-            }
-            case Types.NUMERIC, Types.DECIMAL -> {
-                if (value instanceof BigDecimal bigDecimal)
-                    stmt.setBigDecimal(parameterIndex, bigDecimal);
-                else if (value instanceof Number number)
-                    stmt.setBigDecimal(parameterIndex, BigDecimal.valueOf(number.doubleValue()));
-                else
-                    stmt.setBigDecimal(parameterIndex, new BigDecimal(String.valueOf(value)));
-            }
-            default -> stmt.setObject(parameterIndex, value, column.jdbcType());
-        }
+        else
+            stmt.setObject(parameterIndex, PgValues.toParameter(value, column.databaseTypeName()));
     }
 
     private record ColumnDefinition(String name, int jdbcType, String databaseTypeName) {

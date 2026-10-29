@@ -13,6 +13,20 @@ public class StartPostgresContainers implements QuarkusTestResourceLifecycleMana
 
     @Override
     public Map<String, String> start() {
+        // Run against an existing Postgres instead of a container:
+        //   -Dtest.postgres.url=jdbc:postgresql://localhost:3306/bigquery -Dtest.postgres.user=.. -Dtest.postgres.password=..
+        String existingUrl = System.getProperty("test.postgres.url");
+        if (existingUrl != null) {
+            return Map.of(
+                    "quarkus.analytics.disabled", "true",
+                    "quarkus.http.test-timeout", "3s",
+                    "quarkus.datasource.db-kind", "postgresql",
+                    "quarkus.datasource.jdbc.url", existingUrl,
+                    "quarkus.datasource.username", System.getProperty("test.postgres.user", "postgres"),
+                    "quarkus.datasource.password", System.getProperty("test.postgres.password", "postgres")
+            );
+        }
+
         Network network = Network.newNetwork();
         String networkAlias = "gcp-emulator-tests";
 

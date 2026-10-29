@@ -147,18 +147,7 @@ public class JobBuilder {
 
     private static @NonNull JobStatistics2 queryStats(Postgres.QueryResult result) {
         JobStatistics2 queryStats = new JobStatistics2();
-
-        TableSchema schema = new TableSchema();
-        List<TableFieldSchema> fields = new ArrayList<>();
-        for (Postgres.Column column : result.columns()) {
-            TableFieldSchema field = new TableFieldSchema();
-            field.setName(column.name());
-            field.setType(Fn.toBigQueryType(column.jdbcType()));
-            field.setMode("NULLABLE");
-            fields.add(field);
-        }
-        schema.setFields(fields);
-        queryStats.setSchema(schema);
+        queryStats.setSchema(Fn.tableSchema(result.columns()));
         return queryStats;
     }
 }

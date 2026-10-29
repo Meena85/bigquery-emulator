@@ -21,7 +21,7 @@ public class Catalog {
     public record TableInfo(String name, boolean view) {
     }
 
-    public record ColumnInfo(String name, String dataType, boolean nullable) {
+    public record ColumnInfo(String name, String pgType, boolean nullable) {
     }
 
     public record TablePage(List<TableInfo> tables, long total) {
@@ -104,7 +104,7 @@ public class Catalog {
         List<ColumnInfo> columns = new ArrayList<>();
         try (Connection con = dataSource.getConnection();
              PreparedStatement stmt = con.prepareStatement("""
-                     SELECT column_name, data_type, is_nullable FROM information_schema.columns
+                     SELECT column_name, udt_name, is_nullable FROM information_schema.columns
                      WHERE table_schema = ? AND table_name = ?
                      ORDER BY ordinal_position
                      """)) {
