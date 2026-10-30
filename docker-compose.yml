@@ -1,0 +1,56 @@
+# BigQuery emulator (native image) + the Postgres database behind it.
+#
+#   docker compose up --build       build the native image (takes a while) and start everything
+#   docker compose down -v          also delete the database; the files in ./init are loaded again on the next start
+#
+# BigQuery clients: host http://localhost:${BQ_PORT:-9050}, any project id, no credentials.
+name: bq
+services:
+  postgres:
+    image: docker.io/postgres:18-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_DB: bigquery
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    networks: [ 'bq-net' ]
+    volumes:
+      - pgdata:/var/lib/postgresql
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d bigquery"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  bigquery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bigquery-emulator:native
+    container_name: bigquery
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres:5432/bigquery
+      QUARKUS_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+      QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # Loaded once, when the database is created (see init/README.md)
+      EMULATOR_INIT_DIR: /init
+      EMULATOR_INIT_PROJECT: ${BQ_PROJECT:-local}
+    networks: [ 'bq-net' ]
+    volumes:
+      - ${INIT_DIR:-./init}:/init:ro
+    ports:
+      - "${BQ_PORT:-9050}:9050"
+    # A failed initial load stops the emulator with the error in its log; fix the files and start again
+    restart: "no"
+
+volumes:
+  pgdata:
+
+networks:
+  bq-net:
+    driver: bridge

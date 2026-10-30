@@ -197,4 +197,27 @@ class Bq2PsqlTest {
         assertEquals(List.of("mixedcase"), insertAll.columns());
         assertArrayEquals(new Object[]{"v"}, insertAll.rows().getFirst());
     }
+
+    @Test
+    void createAndDropSchemaMapDatasetsToPostgresSchemas() throws SqlParseException {
+        Bq2Psql bq = new Bq2Psql();
+
+        assertEquals("CREATE SCHEMA \"p$app\"", bq.translate("CREATE SCHEMA app", "P"));
+        assertEquals("CREATE SCHEMA IF NOT EXISTS \"other$app\"", bq.translate("CREATE SCHEMA IF NOT EXISTS `other`.`app` OPTIONS(location = 'US', description = 'a (b)')", "p"));
+        assertEquals("CREATE SCHEMA IF NOT EXISTS \"p$app\"", bq.translate("create dataset if not exists p.app;"));
+        assertEquals("DROP SCHEMA IF EXISTS \"p$app\" CASCADE", bq.translate("DROP SCHEMA IF EXISTS app CASCADE", "p"));
+        assertEquals("DROP SCHEMA \"p$app\"", bq.translate("DROP DATASET app", "p"));
+    }
+
+    @Test
+    void dmlTargetsAreRewritten() throws SqlParseException {
+        Bq2Psql bq = new Bq2Psql();
+
+        assertEquals("INSERT INTO \"p$ds\".t (a, b) VALUES (1, 'x'), (2, 'it''s')",
+                bq.translate("INSERT INTO `ds`.`t` (a, b) VALUES (1, 'x'), (2, 'it\\'s')", "p").replace("\n", " "));
+        assertEquals("INSERT INTO \"p$ds\".t (a) VALUES (1)", bq.translate("INSERT ds.t (a) VALUES (1)", "p").replace("\n", " "));
+        assertEquals("INSERT INTO \"p$ds\".t SELECT a FROM \"p$ds\".u", bq.translate("INSERT INTO ds.t SELECT a FROM ds.u", "p").replace("\n", " "));
+        assertEquals("UPDATE \"p$ds\".t SET a = 1 WHERE b = 'x'", bq.translate("UPDATE ds.t SET a = 1 WHERE b = 'x'", "p").replace("\n", " "));
+        assertEquals("DELETE FROM \"p$ds\".t WHERE a = 1", bq.translate("DELETE FROM ds.t WHERE a = 1", "p").replace("\n", " "));
+    }
 }

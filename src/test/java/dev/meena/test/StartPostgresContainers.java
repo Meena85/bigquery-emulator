@@ -20,7 +20,6 @@ public class StartPostgresContainers implements QuarkusTestResourceLifecycleMana
             return Map.of(
                     "quarkus.analytics.disabled", "true",
                     "quarkus.http.test-timeout", "3s",
-                    "quarkus.datasource.db-kind", "postgresql",
                     "quarkus.datasource.jdbc.url", existingUrl,
                     "quarkus.datasource.username", System.getProperty("test.postgres.user", "postgres"),
                     "quarkus.datasource.password", System.getProperty("test.postgres.password", "postgres")
@@ -43,7 +42,6 @@ public class StartPostgresContainers implements QuarkusTestResourceLifecycleMana
         return Map.of(
                 "quarkus.analytics.disabled", "true",
                 "quarkus.http.test-timeout", "3s",
-                "quarkus.datasource.db-kind", "postgresql",
                 "quarkus.datasource.jdbc.url", postgreSQLContainer.getJdbcUrl(),
                 "quarkus.datasource.username", postgreSQLContainer.getUsername(),
                 "quarkus.datasource.password", postgreSQLContainer.getPassword()

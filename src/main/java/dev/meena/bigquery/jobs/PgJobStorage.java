@@ -396,7 +396,9 @@ public class PgJobStorage {
         String normalized = sql.stripLeading().toLowerCase(Locale.ROOT);
         return normalized.startsWith("drop table ")
                 || normalized.startsWith("create table ")
+                || normalized.startsWith("insert ")
                 || normalized.startsWith("update ")
+                || normalized.startsWith("delete ")
                 || normalized.startsWith("create or replace table ");
     }
 

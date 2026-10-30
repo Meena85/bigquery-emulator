@@ -28,6 +28,10 @@ import static java.util.stream.Collectors.joining;
 @ApplicationScoped
 public class Bq2Psql implements SqlSyntaxConverter {
 
+    // BigQuery allows "INSERT t ..." where Calcite requires "INSERT INTO t ..."
+    private static final Pattern INSERT_WITHOUT_INTO = Pattern.compile("(?is)^(\\s*insert\\s+)(?!into\\b)");
+    private static final Pattern CREATE_SCHEMA_PATTERN = Pattern.compile("(?is)^\\s*create\\s+(?:schema|dataset)\\s+(if\\s+not\\s+exists\\s+)?([^\\s(]+)\\s*(?:options\\s*\\(.*\\))?\\s*$");
+    private static final Pattern DROP_SCHEMA_PATTERN = Pattern.compile("(?is)^\\s*drop\\s+(?:schema|dataset)\\s+(if\\s+exists\\s+)?([^\\s]+?)(?:\\s+(cascade|restrict))?\\s*$");
     private static final Pattern DROP_TABLE_PATTERN = Pattern.compile("(?is)^\\s*drop\\s+table\\s+(if\\s+exists\\s+)?(.+)$");
     private static final Pattern CREATE_TABLE_PATTERN = Pattern.compile("(?is)^\\s*create\\s+(or\\s+replace\\s+)?table\\s+(if\\s+not\\s+exists\\s+)?(.+)$");
     private static final Set<String> INFORMATION_SCHEMA_IDENTIFIER_COLUMNS = Set.of(
@@ -61,22 +65,7 @@ public class Bq2Psql implements SqlSyntaxConverter {
 
     @Override
     public String translate(String bqSql) throws SqlParseException {
-        if (bqSql == null) return null;
-
-        bqSql = Fn.removeSemiColon(bqSql);
-        String dropTableSql = translateDropTable(bqSql, null);
-        if (dropTableSql != null) return dropTableSql;
-        String createTableSql = translateCreateTable(bqSql, null);
-        if (createTableSql != null) return createTableSql;
-
-        // 2. Parse the BigQuery SQL into a SqlNode (AST)
-        SqlParser parser = SqlParser.create(bqSql, parserConfig);
-
-        SqlNode sqlNode = parser.parseQuery();
-
-        // 3. Unparse the AST into PostgreSQL dialect
-        // This automatically converts backticks to double quotes and handles quoting rules
-        return rewriteTableIdentifiers(sqlNode, null).toSqlString(BqToPgDialect.INSTANCE).getSql();
+        return translate(bqSql, null);
     }
 
     @Override
@@ -85,18 +74,41 @@ public class Bq2Psql implements SqlSyntaxConverter {
 
         bqSql = Fn.removeSemiColon(bqSql);
 
+        String schemaSql = translateSchemaStatement(bqSql, defaultProject);
+        if (schemaSql != null) return schemaSql;
+
         String dropTableSql = translateDropTable(bqSql, defaultProject);
         if (dropTableSql != null) return dropTableSql;
 
         String createTableSql = translateCreateTable(bqSql, defaultProject);
         if (createTableSql != null) return createTableSql;
 
-        SqlParser parser = SqlParser.create(bqSql, parserConfig);
+        SqlParser parser = SqlParser.create(INSERT_WITHOUT_INTO.matcher(bqSql).replaceFirst("$1INTO "), parserConfig);
         SqlNode sqlNode = parser.parseQuery();
 
         return rewriteTableIdentifiers(sqlNode, defaultProject)
                 .toSqlString(BqToPgDialect.INSTANCE)
                 .getSql();
+    }
+
+    /** CREATE/DROP SCHEMA (or DATASET) [project.]dataset: a dataset is the Postgres schema "project$dataset". */
+    private static String translateSchemaStatement(String bqSql, String defaultProject) {
+        Matcher create = CREATE_SCHEMA_PATTERN.matcher(bqSql);
+        if (create.matches())
+            return "CREATE SCHEMA " + (create.group(1) == null ? "" : "IF NOT EXISTS ") + datasetSchema(create.group(2), defaultProject);
+
+        Matcher drop = DROP_SCHEMA_PATTERN.matcher(bqSql);
+        if (drop.matches()) {
+            String mode = drop.group(3) == null ? "" : " " + drop.group(3).toUpperCase(Locale.ROOT);
+            return "DROP SCHEMA " + (drop.group(1) == null ? "" : "IF EXISTS ") + datasetSchema(drop.group(2), defaultProject) + mode;
+        }
+        return null;
+    }
+
+    private static String datasetSchema(String identifier, String defaultProject) {
+        List<String> parts = toSqlIdentifier(identifier).names;
+        String project = parts.size() >= 2 ? parts.get(parts.size() - 2) : defaultProject;
+        return Fn.pgQuote(Fn.toSchema(project, parts.getLast()));
     }
 
     private static String translateDropTable(String bqSql, String defaultProject) {
@@ -493,6 +505,15 @@ public class Bq2Psql implements SqlSyntaxConverter {
 
         @Override
         public SqlNode visit(SqlCall call) {
+            // DML: only the target table needs rewriting, the source query is visited below
+            if (call instanceof SqlInsert insert) {
+                insert.setOperand(1, rewriteFromNode(insert.getTargetTable(), defaultProject));
+            } else if (call instanceof SqlUpdate update) {
+                update.setOperand(0, rewriteFromNode(update.getTargetTable(), defaultProject));
+            } else if (call instanceof SqlDelete delete) {
+                delete.setOperand(0, rewriteFromNode(delete.getTargetTable(), defaultProject));
+            }
+
             if (call instanceof SqlSelect select) {
                 SqlNode from = select.getFrom();
                 if (from != null) {

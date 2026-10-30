@@ -35,6 +35,9 @@ Use the Maven wrapper (`./mvnw`) at the repository root:
 
 # Build GraalVM native executable
 ./mvnw package -Dnative
+
+# Postgres + native image + one-time load of ./init (see init/README.md)
+docker compose up --build
 ```
 
 - **Default Local Configuration (`src/main/resources/application.properties`):**
@@ -71,6 +74,10 @@ src/main/java/dev/meena/bigquery/
 ├── fn/
 │   ├── Fn.java                      # Schema naming (`toSchema`), identifier quoting, SQL text helpers
 │   └── ByteString.java              # Base64 / hex byte wrapper
+├── init/
+│   ├── InitLoader.java              # Loads *.sql / *.csv from EMULATOR_INIT_DIR once into a new database (one transaction + marker)
+│   ├── SqlScript.java               # Splits a BigQuery script into statements (quotes, comments)
+│   └── Csv.java                     # Minimal RFC 4180 CSV parser
 ├── jobs/
 │   ├── Disposition.java             # BigQuery createDisposition & writeDisposition enums
 │   ├── ErrorMessage.java            # Error payload stored with a failed job
@@ -102,7 +109,7 @@ PostgreSQL does not support 3-part table references (`project.dataset.table`) in
 ### 2. SQL Translation Pipeline (`dev.meena.bigquery.dialect`)
 When adding or fixing SQL translation features:
 1. **DDL Pre-Pass (`Bq2Psql.java`):**
-   - `DROP TABLE [IF EXISTS]` and `CREATE [OR REPLACE] TABLE [IF NOT EXISTS]` statements are matched via regex before Calcite parsing so their target table identifiers can be rewritten to `"<project>$<dataset>".<table>`.
+   - `DROP TABLE [IF EXISTS]`, `CREATE [OR REPLACE] TABLE [IF NOT EXISTS]` and `CREATE/DROP SCHEMA` (a dataset) statements are matched via regex before Calcite parsing so their target table identifiers can be rewritten to `"<project>$<dataset>".<table>`.
 2. **Calcite AST Parsing & Rewriting (`Bq2Psql.java`):**
    - Parsed using `SqlParser.config().withConformance(SqlConformanceEnum.BIG_QUERY).withLex(Lex.BIG_QUERY).withCaseSensitive(false)`.
    - `SqlSelectShuttle` walks the AST (`FROM`, `JOIN`, subqueries, aliases) and rewrites 2-part and 3-part `SqlIdentifier` table references into `"<project>$<dataset>"` schema notation while preserving table aliases.
